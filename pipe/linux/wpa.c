@@ -487,7 +487,7 @@ void *open_relay(void *data)
     struct sockaddr_in console_addr = {0};
     console_addr.sin_family = AF_INET;
     console_addr.sin_addr.s_addr = inet_addr("192.168.1.10");
-    console_addr.sin_port = htons(port - 100);
+    console_addr.sin_port = htons(port - 100 + 20000);
 
     sockaddr_u frontend_addr;
     size_t frontend_addr_size;

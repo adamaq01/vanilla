@@ -10,7 +10,7 @@
 
 struct wpa_ctrl;
 
-#define VANILLA_MAX_EVENT_COUNT 20
+#define VANILLA_MAX_EVENT_COUNT 48
 typedef struct
 {
     vanilla_event_t events[VANILLA_MAX_EVENT_COUNT];

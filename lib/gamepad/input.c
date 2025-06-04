@@ -53,6 +53,7 @@ typedef struct {
     TouchPoint points[10];
 } TouchScreenState;
 
+volatile char mutex_initialized = 0;
 pthread_mutex_t button_mtx;
 int32_t current_buttons[VANILLA_BTN_COUNT] = {0};
 int current_touch_x = -1;
@@ -83,6 +84,10 @@ typedef struct {
 
 void set_button_state(int button, int32_t value)
 {
+    if (!mutex_initialized) {
+        pthread_mutex_init(&button_mtx, NULL);
+        mutex_initialized = 1;
+    }
     pthread_mutex_lock(&button_mtx);
     current_buttons[button] = value;
     pthread_mutex_unlock(&button_mtx);
@@ -90,6 +95,10 @@ void set_button_state(int button, int32_t value)
 
 void set_touch_state(int x, int y)
 {
+    if (!mutex_initialized) {
+        pthread_mutex_init(&button_mtx, NULL);
+        mutex_initialized = 1;
+    }
     pthread_mutex_lock(&button_mtx);
     current_touch_x = x;
     current_touch_y = y;
@@ -155,6 +164,10 @@ float unpack_float(int32_t x)
 int current_battery_status = VANILLA_BATTERY_STATUS_CHARGING;
 void set_battery_status(int status)
 {
+    if (!mutex_initialized) {
+        pthread_mutex_init(&button_mtx, NULL);
+        mutex_initialized = 1;
+    }
     pthread_mutex_lock(&button_mtx);
     current_battery_status = status;
     pthread_mutex_unlock(&button_mtx);
@@ -167,6 +180,10 @@ void send_input(int socket_hid)
 
     static uint16_t seq_id = 0;
 
+    if (!mutex_initialized) {
+        pthread_mutex_init(&button_mtx, NULL);
+        mutex_initialized = 1;
+    }
     pthread_mutex_lock(&button_mtx);
 
     ip.touchscreen.points[9].x.extra = reverse_bits(current_battery_status, 3);
@@ -227,8 +244,8 @@ void send_input(int socket_hid)
 
     ip.audio_volume = current_buttons[VANILLA_AXIS_VOLUME];
 
-    ip.accelerometer.x = unpack_float(current_buttons[VANILLA_SENSOR_ACCEL_X]) * -800;
-    ip.accelerometer.y = unpack_float(current_buttons[VANILLA_SENSOR_ACCEL_Y]) * -800;
+    ip.accelerometer.x = unpack_float(current_buttons[VANILLA_SENSOR_ACCEL_X]) * 800;
+    ip.accelerometer.y = unpack_float(current_buttons[VANILLA_SENSOR_ACCEL_Y]) * 800;
     ip.accelerometer.z = unpack_float(current_buttons[VANILLA_SENSOR_ACCEL_Z]) * 800;
 
     ip.gyroscope.yaw = (unpack_float(current_buttons[VANILLA_SENSOR_GYRO_YAW]) * (180.0f/M_PI)) / ((200.0f * 6.0f) / 154000.0f);

@@ -25,6 +25,8 @@ extern "C" {
 static const uint32_t VANILLA_ADDRESS_LOCAL = 0xFFFFFFFF;
 static const uint32_t VANILLA_ADDRESS_DIRECT = 0x0;
 
+static uint32_t VANILLA_VITA_ADDRESS = 0x0;
+
 enum VanillaGamepadButtons
 {
     VANILLA_BTN_A,

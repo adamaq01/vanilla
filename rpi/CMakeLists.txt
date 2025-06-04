@@ -1,171 +1,19 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.16)
 
-set(_sdl_lib SDL2::SDL2)
-set(_vanilla_pi_libs "")
-
-if (VANILLA_BUILD_VENDORED)
-    # Static build
-    if (NOT ANDROID)
-        set(BUILD_SHARED_LIBS OFF)
-
-        set(_sdl_lib SDL2::SDL2-static)
-    endif()
-
-    # Link zlib for PNG
-    if (UNIX)
-        list(APPEND _vanilla_pi_libs "z")
-    endif()
-
-    include(FetchContent)
-    include(ExternalProject)
-
-    FetchContent_Declare(
-        SDL2
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG release-2.30.8
-    )
-
-    set(SDL2TTF_VENDORED ON)
-    FetchContent_Declare(
-        SDL2_ttf
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
-        GIT_TAG release-2.24.0
-    )
-
-    FetchContent_Declare(
-        SDL2_image
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL_image.git
-        GIT_TAG release-2.8.5
-    )
-
-    set(LIBXML2_WITH_PYTHON OFF)
-    set(LIBXML2_WITH_ICONV OFF)
-    set(LIBXML2_WITH_PROGRAMS OFF)
-    set(LIBXML2_WITH_TESTS OFF)
-    FetchContent_Declare(
-        libxml2
-        GIT_REPOSITORY https://gitlab.gnome.org/GNOME/libxml2.git
-        GIT_TAG v2.13.5
-        EXCLUDE_FROM_ALL
-    )
-
-    FetchContent_MakeAvailable(SDL2 SDL2_ttf SDL2_image libxml2)
-    set(FFMPEG_PREFIX_DIR "${CMAKE_CURRENT_BINARY_DIR}/FFmpeg-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
-    set(FFMPEG_INSTALL_DIR "${FFMPEG_PREFIX_DIR}/install")
-    set(FFMPEG_CONFIGURE_ARGS
-        --enable-gpl
-        --disable-shared
-        --enable-static
-        --disable-programs
-        --prefix=${FFMPEG_INSTALL_DIR}
-        --disable-doc
-        --disable-swresample
-        --disable-postproc
-        --disable-avfilter
-        --disable-encoders
-        --disable-decoders
-        --disable-demuxers
-        --disable-muxers
-        --disable-network
-        --enable-muxer=mp4
-        --enable-muxer=image2
-        --enable-decoder=h264
-        --enable-encoder=png
-    )
-    if (CMAKE_CROSSCOMPILING)
-        set(FFMPEG_TARGET_OS ${CMAKE_SYSTEM_NAME})
-        set(FFMPEG_ENV "")
-        if (MINGW)
-            set(FFMPEG_TARGET_OS "mingw32")
-            list(APPEND FFMPEG_CONFIGURE_ARGS
-                --cross-prefix=${CMAKE_SYSTEM_PROCESSOR}-w64-mingw32-
-                --host-cc=${CMAKE_C_COMPILER} # HACK: FFmpeg complains about "lack of C11 support" without this because it can't find "gcc"
-            )
-        elseif(MSVC)
-            set(FFMPEG_TARGET_OS "win32")
-        elseif(APPLE)
-            set(FFMPEG_TARGET_OS "darwin")
-        elseif(ANDROID)
-            set(FFMPEG_TARGET_OS "android")
-
-			# Get Android platform version (inexplicably apparently there literally isn't a better way to do this)
-            string(REPLACE "-" " " _android_platform_args ${ANDROID_PLATFORM})
-			separate_arguments(_android_platform_args)
-			list(GET _android_platform_args 1 _android_ver)
-
-			# Construct compiler
-			if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "aarch64")
-				set(_android_ffmpeg_cross_prefix "aarch64-linux-android${_android_ver}-")
-			elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "armv7-a")
-				set(_android_ffmpeg_cross_prefix "armv7a-linux-androideabi${_android_ver}-")
-			elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "i686")
-				set(_android_ffmpeg_cross_prefix "i686-linux-android${_android_ver}-")
-			elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
-				set(_android_ffmpeg_cross_prefix "x86_64-linux-android${_android_ver}-")
-			else()
-				message(FATAL_ERROR "Don't know how to compile FFmpeg on architecture ${CMAKE_SYSTEM_PROCESSOR}")
-			endif()
-
-            list(APPEND FFMPEG_CONFIGURE_ARGS
-				--cross-prefix=${_android_ffmpeg_cross_prefix}
-				--host-cc=${_android_ffmpeg_cross_prefix}clang
-				--host-ld=${_android_ffmpeg_cross_prefix}clang
-                --extra-cflags=${CMAKE_C_FLAGS}
-                --extra-ldflags=${CMAKE_SHARED_LINKER_FLAGS} # CMAKE_STATIC_LINKER_FLAGS is technically more appropriate but it's empty for some reason
-                --sysroot=${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/linux-${CMAKE_HOST_SYSTEM_PROCESSOR}/sysroot
-                --ar=${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/linux-${CMAKE_HOST_SYSTEM_PROCESSOR}/bin/llvm-ar
-                --ranlib=${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/linux-${CMAKE_HOST_SYSTEM_PROCESSOR}/bin/llvm-ranlib
-                --disable-asm
-                --nm=${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/linux-${CMAKE_HOST_SYSTEM_PROCESSOR}/bin/llvm-nm
-                --strip=${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/linux-${CMAKE_HOST_SYSTEM_PROCESSOR}/bin/llvm-strip
-            )
-            list(APPEND FFMPEG_ENV "PATH=$ENV{PATH}:${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/linux-${CMAKE_HOST_SYSTEM_PROCESSOR}/bin:CFLAGS=${CMAKE_C_FLAGS}:LDFLAGS=${CMAKE_SHARED_LINKER_FLAGS}")
-        elseif(LINUX)
-            set(FFMPEG_TARGET_OS "linux")
-            list(APPEND FFMPEG_CONFIGURE_ARGS
-                --cross-prefix=${CMAKE_CROSS_PREFIX}
-                --host-cc=${CMAKE_C_COMPILER}
-            )
-        endif()
-        list(APPEND FFMPEG_CONFIGURE_ARGS
-            --enable-cross-compile
-            --arch=${CMAKE_SYSTEM_PROCESSOR}
-            --target-os=${FFMPEG_TARGET_OS}
-        )
-    endif()
-
-    set(FFMPEG_FILES "")
-    set(FFMPEG_INCLUDE_DIR "${FFMPEG_INSTALL_DIR}/include")
-    foreach(_component avformat avcodec avutil swscale)
-        add_library("FFmpeg::${_component}" SHARED IMPORTED)
-        if (MSVC)
-            set(_component_lib "${FFMPEG_INSTALL_DIR}/bin/${_component}.lib")
-        else()
-            set(_component_lib "${FFMPEG_INSTALL_DIR}/lib/lib${_component}.a")
-        endif()
-        set_target_properties("FFmpeg::${_component}" PROPERTIES
-            IMPORTED_IMPLIB ${_component_lib}
-            IMPORTED_LOCATION ${_component_lib}
-        )
-        list(APPEND FFMPEG_FILES ${_component_lib})
-        add_dependencies("FFmpeg::${_component}" FFmpeg)
-    endforeach()
-
-    list(APPEND FFMPEG_FILES ${FFMPEG_INCLUDE_DIR})
-    include_directories(${FFMPEG_INCLUDE_DIR})
-
-    ExternalProject_Add(FFmpeg
-        DOWNLOAD_DIR ${CMAKE_CURRENT_BINARY_DIR}
-		PREFIX ${FFMPEG_PREFIX_DIR}
-        GIT_REPOSITORY https://git.ffmpeg.org/ffmpeg.git
-        GIT_TAG n7.1
-        CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env ${FFMPEG_ENV} "../FFmpeg/configure" ${FFMPEG_CONFIGURE_ARGS}
-        BUILD_COMMAND ${CMAKE_COMMAND} -E env ${FFMPEG_ENV} make -j${CMAKE_BUILD_PARALLEL_LEVEL}
-        UPDATE_COMMAND ""
-        BUILD_BYPRODUCTS
-            ${FFMPEG_FILES}
-    )
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  if(DEFINED ENV{VITASDK})
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VITASDK}/share/vita.toolchain.cmake" CACHE PATH "toolchain file")
+  else()
+    message(FATAL_ERROR "Please define VITASDK to point to your SDK path!")
+  endif()
 endif()
+
+project(vita-vanilla)
+include("${VITASDK}/share/vita.cmake" REQUIRED)
+
+set(VITA_APP_NAME "Vita Vanilla")
+set(VITA_TITLEID  "VWIIU0001")
+set(VITA_VERSION  "01.00")
 
 list(APPEND VANILLA_PI_SRC
     config.c
@@ -195,112 +43,100 @@ list(APPEND VANILLA_PI_SRC
     ui/ui_sdl.c
     ui/ui_util.c
     ui/ui_util.h
+
+    # vita/common/debugScreen.c
 )
 
-# Declare executable
-if (ANDROID)
-    add_library(vanilla-pi SHARED ${VANILLA_PI_SRC})
-else()
-    add_executable(vanilla-pi ${VANILLA_PI_SRC})
-endif()
+add_executable(${PROJECT_NAME} ${VANILLA_PI_SRC})
+install(TARGETS ${PROJECT_NAME})
 
-# Ensure executable is installed
-install(TARGETS vanilla-pi)
+find_package(SDL2 REQUIRED)
+find_package(LibXml2 REQUIRED)
+find_package(FFmpeg REQUIRED COMPONENTS avformat avcodec avutil swscale)
+find_package(Freetype REQUIRED)
+find_package(MbedTLS REQUIRED)
 
-# Find packages (unless using vendored build)
-if (NOT VANILLA_BUILD_VENDORED)
-    find_package(SDL2 REQUIRED)
-    find_package(SDL2_ttf REQUIRED)
-    find_package(SDL2_image REQUIRED)
-endif()
+#find_package(PkgConfig REQUIRED)
+#set(CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/psv/ffmpeg/pkg/ffmpeg/usr/local/vitasdk/arm-vita-eabi/lib/pkgconfig")
+#pkg_check_modules(avformat REQUIRED NO_CMAKE_PATH IMPORTED_TARGET libavformat)
+#pkg_check_modules(avcodec REQUIRED NO_CMAKE_PATH IMPORTED_TARGET libavcodec)
+#pkg_check_modules(avutil REQUIRED NO_CMAKE_PATH IMPORTED_TARGET libavutil)
+#pkg_check_modules(swscale REQUIRED NO_CMAKE_PATH IMPORTED_TARGET libswscale)
 
-target_link_libraries(vanilla-pi PRIVATE
-    ${_sdl_lib}
-    SDL2::SDL2main
-    SDL2_ttf
-    SDL2_image
+target_link_libraries(${PROJECT_NAME} PRIVATE
     vanilla
-    m
-)
+    ${LIBXML2_LIBRARIES}
 
-if (ANDROID)
-    target_link_libraries(vanilla-pi PRIVATE
-        SDL2main
-        log
-    )
-endif()
+    SDL2::SDL2
 
-# Find FFmpeg
-if (NOT VANILLA_BUILD_VENDORED)
-    find_package(FFmpeg REQUIRED COMPONENTS avformat avcodec avutil swscale)
-endif()
+    SDL2_ttf
+    ${FREETYPE_LIBRARIES}
 
-target_link_libraries(vanilla-pi PRIVATE
+    SDL2_image
+    webp
+    webpdemux
+    png
+    bz2
+
+
     FFmpeg::avformat
     FFmpeg::avcodec
     FFmpeg::avutil
     FFmpeg::swscale
-    ${_vanilla_pi_libs}
+    mp3lame
+    swresample
+    MbedTLS::mbedtls
+
+    pthread
+    m
+    z
+
+    # SceDisplay_stub # debugScreen
+    SceCtrl_stub
+    SceNet_stub
+    SceNetCtl_stub
+    SceSysmodule_stub
+
+    SceAudiodec_stub
+    SceVideodec_stub
+    SceCodecEngine_stub
 )
 
-if (LINUX)
-    # Assume this platform is capable of running vanilla-pipe
-    target_compile_definitions(vanilla-pi PRIVATE VANILLA_PIPE_AVAILABLE)
-
-    # Link with DRM if available
-    find_package(DRM)
-    if (DRM_FOUND)
-        target_link_libraries(vanilla-pi PRIVATE ${DRM_LIBRARIES})
-        target_include_directories(vanilla-pi PRIVATE ${DRM_INCLUDE_DIRS})
-    endif()
-endif()
-
-# Find libxml2 (used for storing/parsing user config)
-if (VANILLA_BUILD_VENDORED)
-    target_link_libraries(vanilla-pi PRIVATE LibXml2::LibXml2)
-else()
-    find_package(LibXML2 REQUIRED)
-    target_link_libraries(vanilla-pi PRIVATE ${LibXML2_LIBRARIES})
-    target_include_directories(vanilla-pi PRIVATE ${LibXML2_INCLUDE_DIR})
-endif()
-
-
-# Link with winsock2 on Windows
-if (WIN32)
-    set_target_properties(vanilla-pi PROPERTIES WIN32_EXECUTABLE true)
-    target_link_libraries(vanilla-pi PRIVATE wsock32 ws2_32)
-endif()
-
-# Set up include directories around the repository
-target_include_directories(vanilla-pi PRIVATE
+target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../lib"
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "${CMAKE_CURRENT_SOURCE_DIR}/vita/common"
+    "${LIBXML2_INCLUDE_DIR}"
+    "${FREETYPE_INCLUDE_DIRS}"
 )
 
-# Install assets
-if(ANDROID)
-    # Put assets in correct place relative to build
-    add_custom_command(
-        TARGET vanilla-pi POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/assets" "${CMAKE_CURRENT_SOURCE_DIR}/../android/app/src/main/assets"
-    )
-else()
-    # Put assets in correct place relative to build
-    add_custom_command(
-        TARGET vanilla-pi POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different "${CMAKE_CURRENT_SOURCE_DIR}/assets" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/../share/vanilla/assets"
-    )
+set(VITA_MKSFOEX_FLAGS "-d ATTRIBUTE2=12")
+vita_create_self(eboot.bin ../bin/vita-vanilla)
+vita_create_vpk(vita-vanilla.vpk ${VITA_TITLEID} eboot.bin
+  VERSION ${VITA_VERSION}
+  NAME ${VITA_APP_NAME}
 
-    if(WIN32)
-        set(_vanilla_pi_asset_destination "bin")
-    else()
-        set(_vanilla_pi_asset_destination "share/vanilla")
-    endif()
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets" DESTINATION "${_vanilla_pi_asset_destination}")
+  FILE assets/font/OFL.txt assets/font/OFL.txt
+  FILE assets/font/system.ttf assets/font/system.ttf
 
-    if (LINUX)
-        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/res/com.mattkc.vanilla.desktop" DESTINATION share/applications)
-        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/res/com.mattkc.vanilla.svg" DESTINATION share/pixmaps)
-    endif()
-endif()
+  FILE assets/tex/backspace_black.svg assets/tex/backspace_black.svg
+  FILE assets/tex/backspace.svg assets/tex/backspace.svg
+  FILE assets/tex/checkmark.svg assets/tex/checkmark.svg
+  FILE assets/tex/club_black.svg assets/tex/club_black.svg
+  FILE assets/tex/club_white.svg assets/tex/club_white.svg
+  FILE assets/tex/club.svg assets/tex/club.svg
+  FILE assets/tex/diamond_black.svg assets/tex/diamond_black.svg
+  FILE assets/tex/diamond_white.svg assets/tex/diamond_white.svg
+  FILE assets/tex/diamond.svg assets/tex/diamond.svg
+  FILE assets/tex/edit.svg assets/tex/edit.svg
+  FILE assets/tex/gamepad.svg assets/tex/gamepad.svg
+  FILE assets/tex/heart_black.svg assets/tex/heart_black.svg
+  FILE assets/tex/heart_white.svg assets/tex/heart_white.svg
+  FILE assets/tex/heart.svg assets/tex/heart.svg
+  FILE assets/tex/settings.png assets/tex/settings.png
+  FILE assets/tex/settings2.png assets/tex/settings2.png
+  FILE assets/tex/spade_black.svg assets/tex/spade_black.svg
+  FILE assets/tex/spade_white.svg assets/tex/spade_white.svg
+  FILE assets/tex/spade.svg assets/tex/spade.svg
+)

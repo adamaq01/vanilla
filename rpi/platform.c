@@ -36,6 +36,19 @@ void vpilog_va(const char *fmt, va_list va)
 //     char buf[4096];
 //     vsnprintf(buf, sizeof(buf), fmt, va);
 //     MessageBoxA(0, buf, 0, 0);
+//#elif defined(__vita__)
+    /*static FILE *log_file = NULL;
+    if (!log_file) {
+        char name[32];
+        vpi_get_data_filename(name, sizeof(name), "log.txt");
+        log_file = fopen(name, "a");
+        if (!log_file) {
+            log_file = stderr; // Fallback to stderr if file cannot be opened
+        }
+        fprintf(log_file, "-------------------------------- VPI log started\n");
+    }
+    vfprintf(log_file, fmt, va);
+    fflush(log_file);*/
 #else
     vfprintf(stderr, fmt, va);
 #endif
@@ -55,6 +68,8 @@ void vpi_asset_filename(char *buf, size_t size, const char *type, const char *fi
     snprintf(buf, size, "%s/%s", type, filename);
 #elif defined(_WIN32)
     snprintf(buf, size, "%s/assets/%s/%s", SDL_GetBasePath(), type, filename);
+#elif defined(__vita__)
+    snprintf(buf, size, "app0:assets/%s/%s", type, filename);
 #else
     snprintf(buf, size, "%s/../share/vanilla/assets/%s/%s", SDL_GetBasePath(), type, filename);
 #endif

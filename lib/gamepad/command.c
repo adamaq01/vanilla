@@ -60,7 +60,7 @@ void send_generic_response(int skt, CmdHeader *response)
 void handle_generic_packet(gamepad_context_t *info, int skt, GenericPacket *request)
 {
     GenericCmdHeader *gen_cmd = &request->generic_cmd_header;
-    vanilla_log("magic: %x, flags: %x, service ID: %u, method ID: %u", gen_cmd->magic_0x7E, gen_cmd->flags, gen_cmd->service_id, gen_cmd->method_id);
+    // vanilla_log("magic: %x, flags: %x, service ID: %u, method ID: %u", gen_cmd->magic_0x7E, gen_cmd->flags, gen_cmd->service_id, gen_cmd->method_id);
 
     // Prepare response
     GenericPacket response;
@@ -193,13 +193,13 @@ void handle_generic_packet(gamepad_context_t *info, int skt, GenericPacket *requ
 
 void handle_uac_uvc_packet(gamepad_context_t *info, int skt, UvcUacPacket *request)
 {
-    vanilla_log("uac/uvc - mic_enable: %u, mic_freq: %u, mic_mute: %u, mic_volume: %i, mic_volume2: %i", request->uac_uvc.mic_enable, request->uac_uvc.mic_freq, request->uac_uvc.mic_mute, request->uac_uvc.mic_volume, request->uac_uvc.mic_volume_2);
+    // vanilla_log("uac/uvc - mic_enable: %u, mic_freq: %u, mic_mute: %u, mic_volume: %i, mic_volume2: %i", request->uac_uvc.mic_enable, request->uac_uvc.mic_freq, request->uac_uvc.mic_mute, request->uac_uvc.mic_volume, request->uac_uvc.mic_volume_2);
 
 	uint8_t mic_enabled = request->uac_uvc.mic_enable;
 	push_event(info->event_loop, VANILLA_EVENT_MIC, &mic_enabled, sizeof(mic_enabled));
 
-	print_hex(&request->uac_uvc, sizeof(request->uac_uvc));
-	vanilla_log_no_newline("\n");
+	// print_hex(&request->uac_uvc, sizeof(request->uac_uvc));
+	// vanilla_log_no_newline("\n");
 
 	// TODO: Create real response instead of using canned data
 	static const size_t uvc_resp_size = 16;
@@ -227,7 +227,7 @@ void handle_time_packet(int skt, TimePacket *request)
 
 void handle_command_packet(gamepad_context_t *info, int skt, CmdHeader *request)
 {
-	vanilla_log("packet_type: %u, query_type: %u, payload_size: 0x%X", request->packet_type, request->query_type, request->payload_size);
+	// vanilla_log("packet_type: %u, query_type: %u, payload_size: 0x%X", request->packet_type, request->query_type, request->payload_size);
     switch (request->packet_type)
     {
     case PACKET_TYPE_REQUEST:

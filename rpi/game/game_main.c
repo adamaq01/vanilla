@@ -50,6 +50,7 @@ void *vpi_event_handler(void *data)
 
         switch (event.type) {
         case VANILLA_EVENT_VIDEO:
+            // vanilla_log("Received video event, size: %zu\n", event.size);
             pthread_mutex_lock(&vpi_decode_loop_mutex);
 
             vpi_decode_size = event.size;

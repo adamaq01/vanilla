@@ -1,15 +1,25 @@
 #define _GNU_SOURCE
+// #define USE_VITA_NET
 
 #include "gamepad.h"
+
+#if defined(__vita__) && defined(USE_VITA_NET)
+#include <psp2/net/net.h>
+#include <psp2/net/netctl.h>
+#endif
 
 #ifdef _WIN32
 #include <winsock2.h>
 typedef uint32_t in_addr_t;
 typedef uint16_t in_port_t;
 #else
+#ifndef USE_VITA_NET
 #include <arpa/inet.h>
+#endif
 #include <errno.h>
+#ifndef __vita__
 #include <sys/un.h>
+#endif
 #endif
 
 #include <assert.h>
@@ -20,31 +30,33 @@ typedef uint16_t in_port_t;
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "../pipe/def.h"
 #include "audio.h"
 #include "command.h"
 #include "input.h"
+#include "util.h"
 #include "video.h"
 
-#include "../pipe/def.h"
-#include "util.h"
-
 static uint32_t SERVER_ADDRESS = 0;
-static const int MAX_PIPE_RETRY = 5;
+static const int MAX_PIPE_RETRY = 30;
 
-#define EVENT_BUFFER_SIZE 65536
+#define EVENT_BUFFER_SIZE       65536
 #define EVENT_BUFFER_ARENA_SIZE VANILLA_MAX_EVENT_COUNT * 2
 uint8_t *EVENT_BUFFER_ARENA[EVENT_BUFFER_ARENA_SIZE] = {0};
 pthread_mutex_t event_buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef union {
+#ifndef USE_VITA_NET
     struct sockaddr_in in;
-#ifndef _WIN32
+#else
+    struct SceNetSockaddrIn in;
+#endif
+#if !defined(_WIN32) && !defined(__vita__)
     struct sockaddr_un un;
 #endif
 } sockaddr_u;
 
-static inline int skterr()
-{
+static inline int skterr() {
 #ifdef _WIN32
     return WSAGetLastError();
 #else
@@ -52,97 +64,150 @@ static inline int skterr()
 #endif
 }
 
-in_addr_t get_real_server_address()
-{
+in_addr_t get_real_server_address() {
     if (SERVER_ADDRESS == VANILLA_ADDRESS_DIRECT) {
         // The Wii U always places itself at this address
+#ifdef USE_VITA_NET
+        return SCE_NET_INADDR_ANY;
+#else
         return inet_addr("192.168.1.10");
+#endif
     } else if (SERVER_ADDRESS != VANILLA_ADDRESS_LOCAL) {
         // If there's a remote pipe, we send to that
         return SERVER_ADDRESS;
     }
 
     // Must be local, in which case we don't care
+#ifdef USE_VITA_NET
+    return SCE_NET_INADDR_ANY;
+#else
     return INADDR_ANY;
+#endif
 }
 
-void create_sockaddr(sockaddr_u *addr, size_t *size, in_addr_t inaddr, uint16_t port, int delete)
-{
-#ifndef _WIN32
+void create_sockaddr(sockaddr_u *addr, size_t *size, in_addr_t inaddr,
+                     uint16_t port, int delete) {
+#if !defined(_WIN32) && !defined(__vita__)
     if (SERVER_ADDRESS == VANILLA_ADDRESS_LOCAL) {
         memset(&addr->un, 0, sizeof(addr->un));
         addr->un.sun_family = AF_UNIX;
-        snprintf(addr->un.sun_path, sizeof(addr->un.sun_path) - 1, VANILLA_PIPE_LOCAL_SOCKET, port);
-        if (delete)
-            unlink(addr->un.sun_path);
+        snprintf(addr->un.sun_path, sizeof(addr->un.sun_path) - 1,
+                 VANILLA_PIPE_LOCAL_SOCKET, port);
+        if (delete) unlink(addr->un.sun_path);
 
         if (size) *size = sizeof(struct sockaddr_un);
     } else {
 #endif
+#ifdef USE_VITA_NET
         memset(&addr->in, 0, sizeof(addr->in));
-        addr->in.sin_family = AF_INET;
-        addr->in.sin_port = htons(port);
+        addr->in.sin_family = SCE_NET_AF_INET;
+        addr->in.sin_port = sceNetHtons(port);
         addr->in.sin_addr.s_addr = inaddr;
 
-        if (size) *size = sizeof(struct sockaddr_in);
-#ifndef _WIN32
+        if (size) *size = sizeof(struct SceNetSockaddrIn);
+#else
+    memset(&addr->in, 0, sizeof(addr->in));
+    addr->in.sin_family = AF_INET;
+    addr->in.sin_port = htons(port);
+    addr->in.sin_addr.s_addr = inaddr;
+
+    if (size) *size = sizeof(struct sockaddr_in);
+#endif
+#if !defined(_WIN32) && !defined(__vita__)
     }
 #endif
 }
 
-void send_to_console(int fd, const void *data, size_t data_size, uint16_t port)
-{
+void send_to_console(int fd, const void *data, size_t data_size,
+                     uint16_t port) {
     sockaddr_u addr;
     size_t addr_size;
 
     in_port_t console_port = port - 100;
 
-    create_sockaddr(&addr, &addr_size, get_real_server_address(), console_port, 0);
+    create_sockaddr(&addr, &addr_size, get_real_server_address(), console_port,
+                    0);
 
-    ssize_t sent = sendto(fd, data, data_size, 0, (const struct sockaddr *) &addr, addr_size);
-    if (sent == -1) {
-		int err = skterr();
-		if (err != 111) { // 111 is connection refused, occurs if we lose connection, but we'll already know that for other reasons so we don't need to spam the console with this error
-			vanilla_log("Failed to send to Wii U socket: fd: %d, port: %d, errno: %i", fd, console_port, skterr());
-		}
+#ifdef USE_VITA_NET
+    ssize_t sent =
+        sceNetSendto(fd, data, data_size, 0,
+                     (const struct SceNetSockaddr *) &addr, addr_size);
+#else
+    ssize_t sent = sendto(fd, data, data_size, 0,
+                          (const struct sockaddr *) &addr, addr_size);
+#endif
+    if (sent < 0) {
+#ifdef USE_VITA_NET
+        int err = sent;
+#else
+        int err = skterr();
+#endif
+        if (err !=
+            111) {  // 111 is connection refused, occurs if we lose connection,
+                    // but we'll already know that for other reasons so we don't
+                    // need to spam the console with this error
+            vanilla_log(
+                "Failed to send to Wii U socket: fd: %d, port: %d, errno: %i",
+                fd, console_port, err);
+        }
     }
 }
 
-void set_socket_rcvtimeo(int skt, uint64_t microseconds)
-{
+void set_socket_rcvtimeo(int skt, uint64_t microseconds) {
 #ifdef _WIN32
     DWORD millis = microseconds / 1000;
-    setsockopt(skt, SOL_SOCKET, SO_RCVTIMEO, (const char *) &millis, sizeof(millis));
+    setsockopt(skt, SOL_SOCKET, SO_RCVTIMEO, (const char *) &millis,
+               sizeof(millis));
+#elif defined(USE_VITA_NET)
+    struct timeval tv = {0};
+    tv.tv_sec = microseconds / 1000000;
+    tv.tv_usec = microseconds % 1000000;
+    sceNetSetsockopt(skt, SCE_NET_SOL_SOCKET, SCE_NET_SO_RCVTIMEO, &tv,
+                     sizeof(tv));
 #else
     struct timeval tv = {0};
     tv.tv_sec = microseconds / 1000000;
     tv.tv_usec = microseconds % 1000000;
     setsockopt(skt, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-#endif // _WIN32
+#endif  // _WIN32
 }
 
-int create_socket(int *socket_out, in_port_t port)
-{
+int create_socket(int *socket_out, in_port_t port) {
     sockaddr_u addr;
     size_t addr_size;
 
-    create_sockaddr(&addr, &addr_size, INADDR_ANY, port, 1);
+    /*static in_port_t newport = 44;
+    port = newport++;*/
 
+    create_sockaddr(&addr, &addr_size, VANILLA_VITA_ADDRESS, port, 1);
+
+#ifdef USE_VITA_NET
+    char name[32];
+    snprintf(name, sizeof(name), "vanilla:%u", port);
+    int skt = sceNetSocket(name, SCE_NET_AF_INET, SCE_NET_SOCK_DGRAM, 0);
+#else
     int domain = (SERVER_ADDRESS == VANILLA_ADDRESS_LOCAL) ? AF_UNIX : AF_INET;
-
     int skt = socket(domain, SOCK_DGRAM, 0);
-    if (skt == -1) {
+#endif
+
+    if (skt < 0) {
         vanilla_log("FAILED TO CREATE SOCKET: %i", skterr());
         return VANILLA_ERR_BAD_SOCKET;
     }
 
-    if (bind(skt, (const struct sockaddr *) &addr, addr_size) == -1) {
+#ifdef USE_VITA_NET
+    int res = 0;
+    if ((res = sceNetBind(skt, (const struct SceNetSockaddr *) &addr,
+                          addr_size)) < 0) {
+#else
+    if (bind(skt, (const struct sockaddr *) &addr, addr_size) < 0) {
+#endif
         vanilla_log("FAILED TO BIND PORT %u: %i", port, skterr());
         close(skt);
         return VANILLA_ERR_BAD_SOCKET;
     }
 
-    // vanilla_log("SUCCESSFULLY BOUND SOCKET %i ON PORT %i", skt, port);
+    vanilla_log("SUCCESSFULLY BOUND SOCKET %i ON PORT %i", skt, port);
 
     (*socket_out) = skt;
 
@@ -151,18 +216,26 @@ int create_socket(int *socket_out, in_port_t port)
     return VANILLA_SUCCESS;
 }
 
-int send_pipe_cc(int skt, vanilla_pipe_command_t *cmd, size_t cmd_size, int wait_for_reply)
-{
+int send_pipe_cc(int skt, vanilla_pipe_command_t *cmd, size_t cmd_size,
+                 int wait_for_reply) {
     sockaddr_u addr;
     size_t addr_size;
 
-    create_sockaddr(&addr, &addr_size, get_real_server_address(), VANILLA_PIPE_CMD_SERVER_PORT, 0);
+    create_sockaddr(&addr, &addr_size, get_real_server_address(),
+                    VANILLA_PIPE_CMD_SERVER_PORT, 0);
 
     ssize_t read_size;
     uint8_t recv_cc;
 
     for (int retries = 0; retries < MAX_PIPE_RETRY; retries++) {
-        if (sendto(skt, (const char *) cmd, cmd_size, 0, (const struct sockaddr *) &addr, addr_size) == -1) {
+#ifdef USE_VITA_NET
+        if (sceNetSendto(skt, (const char *) cmd, cmd_size, 0,
+                         (const struct SceNetSockaddr *) &addr,
+                         addr_size) == -1) {
+#else
+        if (sendto(skt, (const char *) cmd, cmd_size, 0,
+                   (const struct sockaddr *) &addr, addr_size) == -1) {
+#endif
             vanilla_log("Failed to write control code to socket");
             return 0;
         }
@@ -171,7 +244,11 @@ int send_pipe_cc(int skt, vanilla_pipe_command_t *cmd, size_t cmd_size, int wait
             return 1;
         }
 
+#ifdef USE_VITA_NET
+        read_size = sceNetRecv(skt, &recv_cc, sizeof(recv_cc), 0);
+#else
         read_size = recv(skt, &recv_cc, sizeof(recv_cc), 0);
+#endif
         if (recv_cc == VANILLA_PIPE_CC_BIND_ACK) {
             return 1;
         }
@@ -184,15 +261,14 @@ int send_pipe_cc(int skt, vanilla_pipe_command_t *cmd, size_t cmd_size, int wait
     return 0;
 }
 
-int send_unbind_cc(int skt)
-{
+int send_unbind_cc(int skt) {
     vanilla_pipe_command_t cmd;
     cmd.control_code = VANILLA_PIPE_CC_UNBIND;
     return send_pipe_cc(skt, &cmd, sizeof(cmd.control_code), 0);
 }
 
-int connect_to_backend(int *socket, vanilla_pipe_command_t *cmd, size_t cmd_size)
-{
+int connect_to_backend(int *socket, vanilla_pipe_command_t *cmd,
+                       size_t cmd_size) {
     // Try to bind with backend
     int pipe_cc_skt = -1;
     int ret = create_socket(&pipe_cc_skt, VANILLA_PIPE_CMD_CLIENT_PORT);
@@ -213,15 +289,13 @@ int connect_to_backend(int *socket, vanilla_pipe_command_t *cmd, size_t cmd_size
     return VANILLA_SUCCESS;
 }
 
-void wait_for_interrupt()
-{
+void wait_for_interrupt() {
     while (!is_interrupted()) {
         usleep(100000);
     }
 }
 
-void sync_internal(thread_data_t *data)
-{
+void sync_internal(thread_data_t *data) {
     clear_interrupt();
 
     SERVER_ADDRESS = data->server_address;
@@ -230,23 +304,38 @@ void sync_internal(thread_data_t *data)
 
     vanilla_pipe_command_t cmd;
     cmd.control_code = VANILLA_PIPE_CC_SYNC;
+#ifdef USE_VITA_NET
+    cmd.sync.code = sceNetHtons(code);
+#else
     cmd.sync.code = htons(code);
+#endif
 
     int skt = -1;
 
     vanilla_sync_event_t syncdata;
 
-    syncdata.status = connect_to_backend(&skt, &cmd, sizeof(cmd.control_code) + sizeof(cmd.sync));
+    syncdata.status = connect_to_backend(
+        &skt, &cmd, sizeof(cmd.control_code) + sizeof(cmd.sync));
 
     if (syncdata.status == VANILLA_SUCCESS) {
         // Wait for sync result from pipe
         vanilla_pipe_command_t recv_cmd;
         syncdata.status = VANILLA_ERR_PIPE_UNRESPONSIVE;
         for (int retries = 0; retries < MAX_PIPE_RETRY; retries++) {
-            ssize_t read_size = recv(skt, (char *) &recv_cmd, sizeof(recv_cmd), 0);
+#ifdef USE_VITA_NET
+            ssize_t read_size =
+                sceNetRecv(skt, (char *) &recv_cmd, sizeof(recv_cmd), 0);
+#else
+            ssize_t read_size =
+                recv(skt, (char *) &recv_cmd, sizeof(recv_cmd), 0);
+#endif
 
             if (recv_cmd.control_code == VANILLA_PIPE_CC_STATUS) {
+#ifdef USE_VITA_NET
+                syncdata.status = (int32_t) sceNetNtohl(recv_cmd.status.status);
+#else
                 syncdata.status = (int32_t) ntohl(recv_cmd.status.status);
+#endif
                 break;
             } else if (recv_cmd.control_code == VANILLA_PIPE_CC_SYNC_SUCCESS) {
                 syncdata.status = VANILLA_SUCCESS;
@@ -266,21 +355,21 @@ void sync_internal(thread_data_t *data)
     }
 
     if (syncdata.status == VANILLA_SUCCESS) {
-        push_event(data->event_loop, VANILLA_EVENT_SYNC, &syncdata, sizeof(syncdata));
+        push_event(data->event_loop, VANILLA_EVENT_SYNC, &syncdata,
+                   sizeof(syncdata));
     } else {
-        push_event(data->event_loop, VANILLA_EVENT_ERROR, &syncdata.status, sizeof(syncdata.status));
+        push_event(data->event_loop, VANILLA_EVENT_ERROR, &syncdata.status,
+                   sizeof(syncdata.status));
     }
 
     // Wait for interrupt so frontend has a chance to receive event
     wait_for_interrupt();
 
 exit_pipe:
-    if (skt != -1)
-        close(skt);
+    if (skt != -1) close(skt);
 }
 
-void connect_as_gamepad_internal(thread_data_t *data)
-{
+void connect_as_gamepad_internal(thread_data_t *data) {
     clear_interrupt();
 
     SERVER_ADDRESS = data->server_address;
@@ -291,11 +380,16 @@ void connect_as_gamepad_internal(thread_data_t *data)
     int ret = VANILLA_SUCCESS;
 
     // Open all required sockets
-    if (create_socket(&info.socket_vid, PORT_VID) != VANILLA_SUCCESS) goto exit_pipe;
-    if (create_socket(&info.socket_msg, PORT_MSG) != VANILLA_SUCCESS) goto exit_vid;
-    if (create_socket(&info.socket_hid, PORT_HID) != VANILLA_SUCCESS) goto exit_msg;
-    if (create_socket(&info.socket_aud, PORT_AUD) != VANILLA_SUCCESS) goto exit_hid;
-    if (create_socket(&info.socket_cmd, PORT_CMD) != VANILLA_SUCCESS) goto exit_aud;
+    if (create_socket(&info.socket_msg, PORT_MSG) != VANILLA_SUCCESS)
+        goto exit_vid;
+    if (create_socket(&info.socket_vid, PORT_VID) != VANILLA_SUCCESS)
+        goto exit_pipe;
+    if (create_socket(&info.socket_aud, PORT_AUD) != VANILLA_SUCCESS)
+        goto exit_hid;
+    if (create_socket(&info.socket_hid, PORT_HID) != VANILLA_SUCCESS)
+        goto exit_msg;
+    if (create_socket(&info.socket_cmd, PORT_CMD) != VANILLA_SUCCESS)
+        goto exit_aud;
 
     int pipe_cc_skt = -1;
     if (SERVER_ADDRESS != VANILLA_ADDRESS_DIRECT) {
@@ -306,13 +400,22 @@ void connect_as_gamepad_internal(thread_data_t *data)
         cmd.connection.psk = data->psk;
 
         // Connect to backend pipe
-        ret = connect_to_backend(&pipe_cc_skt, &cmd, sizeof(cmd.control_code) + sizeof(cmd.connection));
+        ret = connect_to_backend(
+            &pipe_cc_skt, &cmd,
+            sizeof(cmd.control_code) + sizeof(cmd.connection));
         if (ret == VANILLA_SUCCESS) {
             // Wait for backend to be available
             vanilla_pipe_command_t connected_state;
             ret = VANILLA_ERR_NO_CONNECTION;
             while (!is_interrupted()) {
-                ssize_t read_size = recv(pipe_cc_skt, (char *) &connected_state, sizeof(connected_state), 0);
+#ifdef USE_VITA_NET
+                ssize_t read_size =
+                    sceNetRecv(pipe_cc_skt, (char *) &connected_state,
+                               sizeof(connected_state), 0);
+#else
+                ssize_t read_size = recv(pipe_cc_skt, (char *) &connected_state,
+                                         sizeof(connected_state), 0);
+#endif
                 if (read_size < 0) {
                     int r = skterr();
 #ifdef _WIN32
@@ -324,7 +427,8 @@ void connect_as_gamepad_internal(thread_data_t *data)
                         ret = VANILLA_ERR_PIPE_UNRESPONSIVE;
                         break;
                     }
-                } else if (connected_state.control_code == VANILLA_PIPE_CC_CONNECTED) {
+                } else if (connected_state.control_code ==
+                           VANILLA_PIPE_CC_CONNECTED) {
                     ret = VANILLA_SUCCESS;
                     sleep(1);
                     break;
@@ -335,37 +439,49 @@ void connect_as_gamepad_internal(thread_data_t *data)
         }
     }
 
+    vanilla_log("CONNECTED TO BACKEND PIPE: %s",
+                ret == VANILLA_SUCCESS ? "YES" : "NO");
+
     if (ret == VANILLA_SUCCESS) {
-        pthread_t video_thread, audio_thread, input_thread, msg_thread, cmd_thread;
+        pthread_t video_thread, audio_thread, input_thread, msg_thread,
+            cmd_thread;
 
         int cnn = VANILLA_ERR_CONNECTED;
         push_event(data->event_loop, VANILLA_EVENT_ERROR, &cnn, sizeof(cnn));
 
         pthread_create(&video_thread, NULL, listen_video, &info);
-        pthread_setname_np(video_thread, "vanilla-video");
+        // pthread_setname_np(video_thread, "vanilla-video");
 
         pthread_create(&audio_thread, NULL, listen_audio, &info);
-        pthread_setname_np(audio_thread, "vanilla-audio");
+        // pthread_setname_np(audio_thread, "vanilla-audio");
 
         pthread_create(&input_thread, NULL, listen_input, &info);
-        pthread_setname_np(input_thread, "vanilla-input");
+        // pthread_setname_np(input_thread, "vanilla-input");
 
         pthread_create(&cmd_thread, NULL, listen_command, &info);
-        pthread_setname_np(cmd_thread, "vanilla-cmd");
+        // pthread_setname_np(cmd_thread, "vanilla-cmd");
 
         while (!is_interrupted()) {
             vanilla_pipe_command_t pipe_state;
-            ssize_t read_size = recv(pipe_cc_skt, (char *) &pipe_state, sizeof(pipe_state), 0);
+#ifdef USE_VITA_NET
+            ssize_t read_size = sceNetRecv(pipe_cc_skt, (char *) &pipe_state,
+                                           sizeof(pipe_state), 0);
+#else
+            ssize_t read_size =
+                recv(pipe_cc_skt, (char *) &pipe_state, sizeof(pipe_state), 0);
+#endif
             if (read_size > 0) {
                 switch (pipe_state.control_code) {
-                case VANILLA_PIPE_CC_DISCONNECTED:
-                    cnn = VANILLA_ERR_DISCONNECTED;
-                    push_event(data->event_loop, VANILLA_EVENT_ERROR, &cnn, sizeof(cnn));
-                    break;
-                case VANILLA_PIPE_CC_CONNECTED:
-                    cnn = VANILLA_ERR_CONNECTED;
-                    push_event(data->event_loop, VANILLA_EVENT_ERROR, &cnn, sizeof(cnn));
-                    break;
+                    case VANILLA_PIPE_CC_DISCONNECTED:
+                        cnn = VANILLA_ERR_DISCONNECTED;
+                        push_event(data->event_loop, VANILLA_EVENT_ERROR, &cnn,
+                                   sizeof(cnn));
+                        break;
+                    case VANILLA_PIPE_CC_CONNECTED:
+                        cnn = VANILLA_ERR_CONNECTED;
+                        push_event(data->event_loop, VANILLA_EVENT_ERROR, &cnn,
+                                   sizeof(cnn));
+                        break;
                 }
             }
         }
@@ -407,8 +523,7 @@ exit:
     wait_for_interrupt();
 }
 
-int push_event(event_loop_t *loop, int type, const void *data, size_t size)
-{
+int push_event(event_loop_t *loop, int type, const void *data, size_t size) {
     int ret = VANILLA_SUCCESS;
 
     pthread_mutex_lock(&loop->mutex);
@@ -416,12 +531,16 @@ int push_event(event_loop_t *loop, int type, const void *data, size_t size)
     if (size <= EVENT_BUFFER_SIZE) {
         // Prevent rollover by skipping oldest event if necessary
         if (loop->new_index == loop->used_index + VANILLA_MAX_EVENT_COUNT) {
-            vanilla_free_event(&loop->events[loop->used_index % VANILLA_MAX_EVENT_COUNT]);
-            vanilla_log("SKIPPED EVENT TO PREVENT ROLLOVER (%lu > %lu + %lu)", loop->new_index, loop->used_index, VANILLA_MAX_EVENT_COUNT);
+            vanilla_free_event(
+                &loop->events[loop->used_index % VANILLA_MAX_EVENT_COUNT]);
+            vanilla_log("SKIPPED EVENT TO PREVENT ROLLOVER (%lu > %lu + %lu)",
+                        loop->new_index, loop->used_index,
+                        VANILLA_MAX_EVENT_COUNT);
             loop->used_index++;
         }
 
-        vanilla_event_t *ev = &loop->events[loop->new_index % VANILLA_MAX_EVENT_COUNT];
+        vanilla_event_t *ev =
+            &loop->events[loop->new_index % VANILLA_MAX_EVENT_COUNT];
 
         assert(!ev->data);
 
@@ -438,9 +557,14 @@ int push_event(event_loop_t *loop, int type, const void *data, size_t size)
 
         loop->new_index++;
 
+        pthread_mutex_unlock(&loop->mutex);
         pthread_cond_broadcast(&loop->waitcond);
+        return ret;
     } else {
-        vanilla_log("FAILED TO PUSH EVENT: wanted %lu, only had %lu. This is a bug, please report to developers.", size, EVENT_BUFFER_SIZE);
+        vanilla_log(
+            "FAILED TO PUSH EVENT: wanted %lu, only had %lu. This is a bug, "
+            "please report to developers.",
+            size, EVENT_BUFFER_SIZE);
         ret = VANILLA_ERR_INVALID_ARGUMENT;
     }
 
@@ -450,8 +574,7 @@ exit:
     return ret;
 }
 
-int get_event(event_loop_t *loop, vanilla_event_t *event, int wait)
-{
+int get_event(event_loop_t *loop, vanilla_event_t *event, int wait) {
     int ret = 0;
 
     pthread_mutex_lock(&loop->mutex);
@@ -465,7 +588,8 @@ int get_event(event_loop_t *loop, vanilla_event_t *event, int wait)
 
         if (loop->active && loop->used_index < loop->new_index) {
             // Output data to pointer
-            vanilla_event_t *pull_event = &loop->events[loop->used_index % VANILLA_MAX_EVENT_COUNT];
+            vanilla_event_t *pull_event =
+                &loop->events[loop->used_index % VANILLA_MAX_EVENT_COUNT];
 
             event->type = pull_event->type;
             event->data = pull_event->data;
@@ -483,8 +607,7 @@ int get_event(event_loop_t *loop, vanilla_event_t *event, int wait)
     return ret;
 }
 
-void *get_event_buffer()
-{
+void *get_event_buffer() {
     void *buf = NULL;
 
     pthread_mutex_lock(&event_buffer_mutex);
@@ -493,15 +616,14 @@ void *get_event_buffer()
             buf = EVENT_BUFFER_ARENA[i];
             EVENT_BUFFER_ARENA[i] = NULL;
             break;
-    }
         }
+    }
     pthread_mutex_unlock(&event_buffer_mutex);
 
     return buf;
 }
 
-void release_event_buffer(void *buffer)
-{
+void release_event_buffer(void *buffer) {
     pthread_mutex_lock(&event_buffer_mutex);
     for (size_t i = 0; i < EVENT_BUFFER_ARENA_SIZE; i++) {
         if (!EVENT_BUFFER_ARENA[i]) {
@@ -512,8 +634,7 @@ void release_event_buffer(void *buffer)
     pthread_mutex_unlock(&event_buffer_mutex);
 }
 
-void init_event_buffer_arena()
-{
+void init_event_buffer_arena() {
     for (size_t i = 0; i < EVENT_BUFFER_ARENA_SIZE; i++) {
         if (!EVENT_BUFFER_ARENA[i]) {
             EVENT_BUFFER_ARENA[i] = malloc(EVENT_BUFFER_SIZE);
@@ -523,8 +644,7 @@ void init_event_buffer_arena()
     }
 }
 
-void free_event_buffer_arena()
-{
+void free_event_buffer_arena() {
     for (size_t i = 0; i < EVENT_BUFFER_ARENA_SIZE; i++) {
         if (EVENT_BUFFER_ARENA[i]) {
             free(EVENT_BUFFER_ARENA[i]);

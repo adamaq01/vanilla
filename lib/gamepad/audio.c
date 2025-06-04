@@ -128,6 +128,115 @@ static void *handle_queued_audio(void *data)
 	return 0;
 }
 
+char audioSeqNumLT10(uint32_t s1, uint32_t s2) {
+    // Compare 10-bit sequence numbers using only the lower 10 bits
+    int diff = (s2 - s1) & 0x3FF;  // mask to 10-bit difference
+    return (diff != 0) && (diff < 512);
+}
+
+char audioSeqNumGT10(uint32_t s1, uint32_t s2) {
+    // Compare 10-bit sequence numbers using only the lower 10 bits
+    int diff = (s1 - s2) & 0x3FF;  // mask to 10-bit difference
+    return (diff != 0) && (diff < 512);
+}
+
+size_t audioInsertSorted(AudioPacket **arr, size_t len, AudioPacket *value, size_t capacity)
+{
+    // Cannot insert more elements if n is already
+    // more than or equal to capacity
+    if (len >= capacity)
+        return len;
+
+    int i;
+    for (i = len - 1; (i >= 0 && audioSeqNumGT10(arr[i]->seq_id, value->seq_id)); i--)
+        arr[i + 1] = arr[i];
+
+    arr[i + 1] = value;
+
+    return (len + 1);
+}
+
+char *hexdump(const unsigned char *data, size_t len) {
+	static char buffer[1024];
+	size_t pos = 0;
+
+	for (size_t i = 0; i < len && pos < sizeof(buffer) - 1; i++) {
+		pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%02x ", data[i]);
+	}
+
+	buffer[pos] = '\0'; // Null-terminate the string
+	return buffer;
+}
+
+void handle_audio_packet2(gamepad_context_t *ctx, unsigned char *data, size_t len) {
+    //
+    // === IMPORTANT NOTE! ===
+    //
+    // This for loop skips ap->format, ap->seq_id, and ap->timestamp to save processing.
+    // If you want those, you'll have to adjust this loop.
+    //
+    for (int byte = 0; byte < 2; byte++) {
+        data[byte] = (unsigned char) reverse_bits(data[byte], 8);
+    }
+
+	// hexdump first 32 bytes of data
+	// vanilla_log("Received audio packet: %s", hexdump(data, MIN(len, 32)));
+
+    AudioPacket *ap = (AudioPacket *) data;
+	
+    ap->seq_id = reverse_bits(ap->seq_id, 10);
+    /*ap->format = reverse_bits(ap->format, 3);
+    ap->mono = reverse_bits(ap->mono, 1);
+    ap->vibrate = reverse_bits(ap->vibrate, 1);
+    ap->type = reverse_bits(ap->type, 1);*/
+    ap->payload_size = ntohs(ap->payload_size);
+    // ap->timestamp = reverse_bits(ap->timestamp, 32);
+
+    if (ap->type == TYPE_VIDEO) {
+        AudioPacketVideoFormat *avp = (AudioPacketVideoFormat *) ap->payload;
+        avp->timestamp = ntohl(avp->timestamp);
+        avp->video_format = ntohl(avp->video_format);
+
+        // TODO: Implement
+        return;
+    }
+
+	if (ap->payload_size) {
+        push_event(ctx->event_loop, VANILLA_EVENT_AUDIO, ap->payload, ap->payload_size);
+    }
+
+    uint8_t vibrate_val = ap->vibrate;
+    push_event(ctx->event_loop, VANILLA_EVENT_VIBRATE, &vibrate_val, sizeof(vibrate_val));
+
+    static AudioPacket *buffer[16] = {0};
+    static size_t buflen = 0;
+
+    // Insert the packet into the buffer, ordered by seq_id
+    buflen = audioInsertSorted(buffer, buflen, ap, 16);
+
+    if (buflen >= 16) {
+        for (int i = 0; i < 8; i++) {
+            AudioPacket *pkt = buffer[i];
+            if (pkt != NULL) {
+				/*if (pkt->payload_size) {
+					push_event(ctx->event_loop, VANILLA_EVENT_AUDIO, pkt->payload, pkt->payload_size);
+				}
+
+				uint8_t vibrate_val = pkt->vibrate;
+				push_event(ctx->event_loop, VANILLA_EVENT_VIBRATE, &vibrate_val, sizeof(vibrate_val));*/
+			}
+        }
+        // Clear the buffer
+        memset(buffer, 0, sizeof(AudioPacket *) * 8);
+        buflen = 8;  // Reset length
+        // Move the last 8 packets to the front
+        for (int i = 0; i < 8; i++) {
+            buffer[i] = buffer[i + 8];
+        }
+        memset(buffer + 8, 0, sizeof(AudioPacket *) * 8);
+    }
+}
+
 void handle_audio_packet(gamepad_context_t *ctx, unsigned char *data, size_t len)
 {
     //
@@ -183,7 +292,7 @@ void *listen_audio(void *x)
     do {
         size = recv(info->socket_aud, data, sizeof(data), 0);
         if (size > 0) {
-            handle_audio_packet(info, data, size);
+            handle_audio_packet2(info, data, size);
         }
     } while (!is_interrupted());
 

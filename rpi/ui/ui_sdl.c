@@ -14,6 +14,7 @@
 #include "platform.h"
 #include "ui_priv.h"
 #include "ui_util.h"
+#include <psp2/motion.h>
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
@@ -25,6 +26,11 @@ typedef struct {
     char icon[MAX_BUTTON_TEXT];
     int checked;
 } vui_sdl_cached_texture_t;
+
+struct sensors {
+    SDL_Sensor *accel;
+    SDL_Sensor *gyro;
+};
 
 typedef struct {
     SDL_Window *window;
@@ -42,6 +48,8 @@ typedef struct {
     SDL_AudioDeviceID audio;
     SDL_AudioDeviceID mic;
     SDL_GameController *controller;
+    SDL_Sensor *accel;
+    SDL_Sensor *gyro;
     SDL_Texture *game_tex;
     int last_shown_toast;
     SDL_Texture *toast_tex;
@@ -148,6 +156,35 @@ SDL_GameController *find_valid_controller()
 	return c;
 }
 
+struct sensors find_valid_sensors()
+{
+	SDL_Sensor *accel = NULL;
+	SDL_Sensor *gyro = NULL;
+
+	vpilog("Looking for sensors...\n");
+	for (int i = 0; i < SDL_NumSensors(); i++) {
+		vpilog("  Found %i: %s\n", i, SDL_SensorGetDeviceName(i));
+        SDL_SensorType type = SDL_SensorGetDeviceType(i);
+        if (type == SDL_SENSOR_ACCEL && !accel) {
+            accel = SDL_SensorOpen(i);
+        } else if (type == SDL_SENSOR_GYRO && !gyro) {
+            gyro = SDL_SensorOpen(i);
+        }
+	}
+
+	if (accel) {
+		vpilog("Using accelerometer \"%s\"\n", SDL_SensorGetName(accel));
+	}
+    if (gyro) {
+        vpilog("Using gyroscope \"%s\"\n", SDL_SensorGetName(gyro));
+    }
+
+	return (struct sensors) {
+        .accel = accel,
+        .gyro = gyro,
+    };
+}
+
 void vui_sdl_audio_handler(const void *data, size_t size, void *userdata)
 {
 	vui_sdl_context_t *sdl_ctx = (vui_sdl_context_t *) userdata;
@@ -168,7 +205,7 @@ void vui_sdl_audio_handler(const void *data, size_t size, void *userdata)
 		sdl_ctx->audio_buffer_end += max_write;
 
 		if (sdl_ctx->audio_buffer_end > sdl_ctx->audio_buffer_start + sdl_ctx->audio_buffer_size) {
-			vpilog("SKIPPED %zu AUDIO BYTES\n", (sdl_ctx->audio_buffer_end - sdl_ctx->audio_buffer_size) - sdl_ctx->audio_buffer_start);
+			// vpilog("SKIPPED %zu AUDIO BYTES\n", (sdl_ctx->audio_buffer_end - sdl_ctx->audio_buffer_size) - sdl_ctx->audio_buffer_start);
 			sdl_ctx->audio_buffer_start = sdl_ctx->audio_buffer_end - sdl_ctx->audio_buffer_size;
 		}
 	}
@@ -276,7 +313,7 @@ void mic_callback(void *userdata, Uint8 *stream, int len)
 int vui_init_sdl(vui_context_t *ctx, int fullscreen)
 {
     // Initialize SDL
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) < 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_SENSOR) < 0) {
         vpilog("Failed to initialize SDL: %s\n", SDL_GetError());
         return -1;
     }
@@ -296,7 +333,8 @@ int vui_init_sdl(vui_context_t *ctx, int fullscreen)
         window_flags = SDL_WINDOW_RESIZABLE;
     }
 
-    sdl_ctx->window = SDL_CreateWindow("Vanilla", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, ctx->screen_width, ctx->screen_height, window_flags);
+    // sdl_ctx->window = SDL_CreateWindow("Vanilla", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, ctx->screen_width, ctx->screen_height, window_flags);
+    sdl_ctx->window = SDL_CreateWindow("Vanilla", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, ctx->screen_width, ctx->screen_height, window_flags | SDL_WINDOW_SHOWN);
     if (!sdl_ctx->window) {
         vpilog("Failed to CreateWindow\n");
         return -1;
@@ -407,6 +445,9 @@ int vui_init_sdl(vui_context_t *ctx, int fullscreen)
     memset(sdl_ctx->image_cache, 0, sizeof(sdl_ctx->image_cache));
     memset(sdl_ctx->textedit_cache, 0, sizeof(sdl_ctx->textedit_cache));
     sdl_ctx->controller = find_valid_controller();
+    struct sensors sensors = find_valid_sensors();
+    sdl_ctx->accel = sensors.accel;
+    sdl_ctx->gyro = sensors.gyro;
 
     sdl_ctx->frame = av_frame_alloc();
 
@@ -955,6 +996,7 @@ void vui_draw_sdl(vui_context_t *ctx, SDL_Renderer *renderer)
         rect.h = btn->sh;
 
         uint8_t f = (btn->enabled ? 1 : 0.5f) * 0xFF;
+        SDL_SetTextureBlendMode(btn_tex->texture, SDL_BLENDMODE_BLEND);
         SDL_SetTextureAlphaMod(btn_tex->texture, f);
         SDL_SetTextureColorMod(btn_tex->texture, f, f, f);
 
@@ -1056,12 +1098,36 @@ int vui_update_sdl(vui_context_t *vui)
 
     SDL_Renderer *renderer = sdl_ctx->renderer;
 
+    SDL_SensorID accel_id = SDL_SensorGetInstanceID(sdl_ctx->accel);
+    SDL_SensorID gyro_id = SDL_SensorGetInstanceID(sdl_ctx->gyro);
+
+    int trigger_width = (vui->screen_width / 2) * 0.8f;
+    int trigger_offset = (vui->screen_width / 2) * 0.15f;
+    int trigger_height = vui->screen_height / 2;
+
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         switch (ev.type) {
         case SDL_QUIT:
             vanilla_stop();
             return 0;
+        case SDL_FINGERMOTION:
+        case SDL_FINGERDOWN:
+        case SDL_FINGERUP:
+            if (SDL_GetTouchDeviceType(ev.tfinger.touchId) == SDL_TOUCH_DEVICE_INDIRECT_ABSOLUTE) {
+                int tr_x = ev.tfinger.x * vui->screen_width;
+                int tr_y = ev.tfinger.y * vui->screen_height;
+                if (tr_x >= trigger_offset && tr_x <= trigger_width + trigger_offset &&
+                    tr_y <= trigger_height && tr_y >= 0) {
+                    vanilla_set_button(VANILLA_BTN_ZL, (ev.type == SDL_FINGERDOWN || ev.type == SDL_FINGERMOTION) ? INT16_MAX : 0);
+                }
+
+                if (tr_x >= vui->screen_width - trigger_offset - trigger_width && tr_x <= vui->screen_width - trigger_offset &&
+                    tr_y <= trigger_height && tr_y >= 0) {
+                    vanilla_set_button(VANILLA_BTN_ZR, (ev.type == SDL_FINGERDOWN || ev.type == SDL_FINGERMOTION) ? INT16_MAX : 0);
+                }
+                break;
+            }
         case SDL_MOUSEMOTION:
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP:
@@ -1069,13 +1135,18 @@ int vui_update_sdl(vui_context_t *vui)
             if (dst_rect->w > 0 && dst_rect->h > 0) {
                 // Translate screen coords to logical coords
                 int tr_x, tr_y;
-                tr_x = (ev.button.x - dst_rect->x) * vui->screen_width / dst_rect->w;
-                tr_y = (ev.button.y - dst_rect->y) * vui->screen_height / dst_rect->h;
+                if (ev.type == SDL_FINGERMOTION || ev.type == SDL_FINGERDOWN || ev.type == SDL_FINGERUP) {
+                    tr_x = ev.tfinger.x * vui->screen_width;
+                    tr_y = ev.tfinger.y * vui->screen_height; 
+                } else {
+                    tr_x = (ev.button.x - dst_rect->x) * vui->screen_width / dst_rect->w;
+                    tr_y = (ev.button.y - dst_rect->y) * vui->screen_height / dst_rect->h;
+                }
 
                 if (vui->game_mode) {
                     // In game mode, pass clicks directly to Vanilla
                     int x, y;
-                    if (ev.button.button == SDL_BUTTON_LEFT && (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEMOTION)) {
+                    if ((ev.button.button == SDL_BUTTON_LEFT && (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEMOTION)) || ev.type == SDL_FINGERDOWN || ev.type == SDL_FINGERMOTION) {
                         x = tr_x;
                         y = tr_y;
                     } else {
@@ -1085,12 +1156,12 @@ int vui_update_sdl(vui_context_t *vui)
                     vanilla_set_touch(x, y);
                 } else {
                     // Otherwise, handle ourselves
-                    if (ev.type == SDL_MOUSEBUTTONDOWN)
+                    if (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_FINGERDOWN)
                         vui_process_mousedown(vui, tr_x, tr_y);
-                    else if (ev.type == SDL_MOUSEBUTTONUP)
+                    else if (ev.type == SDL_MOUSEBUTTONUP || ev.type == SDL_FINGERUP)
                         vui_process_mouseup(vui, tr_x, tr_y);
 
-                    if (vui->active_textedit != -1 && (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEMOTION) && ev.button.button == SDL_BUTTON_LEFT) {
+                    if (vui->active_textedit != -1 && (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEMOTION || ev.type == SDL_FINGERDOWN || ev.type == SDL_FINGERMOTION) && (ev.button.button == SDL_BUTTON_LEFT || ev.type == SDL_FINGERDOWN || ev.type == SDL_FINGERMOTION)) {
                         // Put cursor in correct position
                         vui_textedit_t *edit = &vui->textedits[vui->active_textedit];
                         TTF_Font *font = get_font(sdl_ctx, edit->size);
@@ -1187,14 +1258,25 @@ int vui_update_sdl(vui_context_t *vui)
             }
             break;
         case SDL_CONTROLLERSENSORUPDATE:
-            if (ev.csensor.sensor == SDL_SENSOR_ACCEL) {
+            /*if (ev.csensor.sensor == SDL_SENSOR_ACCEL) {
                 vanilla_set_button(VANILLA_SENSOR_ACCEL_X, pack_float(ev.csensor.data[0]));
-                vanilla_set_button(VANILLA_SENSOR_ACCEL_Y, pack_float(ev.csensor.data[1]));
-                vanilla_set_button(VANILLA_SENSOR_ACCEL_Z, pack_float(ev.csensor.data[2]));
+                vanilla_set_button(VANILLA_SENSOR_ACCEL_Z, pack_float(ev.csensor.data[1]));
+                vanilla_set_button(VANILLA_SENSOR_ACCEL_Y, pack_float(ev.csensor.data[2]));
             } else if (ev.csensor.sensor == SDL_SENSOR_GYRO) {
                 vanilla_set_button(VANILLA_SENSOR_GYRO_PITCH, pack_float(ev.csensor.data[0]));
-                vanilla_set_button(VANILLA_SENSOR_GYRO_YAW, pack_float(ev.csensor.data[1]));
-                vanilla_set_button(VANILLA_SENSOR_GYRO_ROLL, pack_float(ev.csensor.data[2]));
+                vanilla_set_button(VANILLA_SENSOR_GYRO_ROLL, pack_float(ev.csensor.data[1]));
+                vanilla_set_button(VANILLA_SENSOR_GYRO_YAW, pack_float(ev.csensor.data[2]));
+            }*/
+            break;
+        case SDL_SENSORUPDATE:
+            if (ev.sensor.which == accel_id) {
+                vanilla_set_button(VANILLA_SENSOR_ACCEL_X, pack_float(ev.sensor.data[0]));
+                vanilla_set_button(VANILLA_SENSOR_ACCEL_Y, pack_float(ev.sensor.data[2]));
+                vanilla_set_button(VANILLA_SENSOR_ACCEL_Z, pack_float(ev.sensor.data[1]));
+            } else if (ev.sensor.which == gyro_id) {
+                vanilla_set_button(VANILLA_SENSOR_GYRO_PITCH, pack_float(ev.sensor.data[0]));
+                vanilla_set_button(VANILLA_SENSOR_GYRO_YAW, pack_float(ev.sensor.data[2]));
+                vanilla_set_button(VANILLA_SENSOR_GYRO_ROLL, pack_float(-ev.sensor.data[1]));
             }
             break;
         case SDL_KEYDOWN:
@@ -1244,6 +1326,9 @@ int vui_update_sdl(vui_context_t *vui)
         case SDL_TEXTEDITING:
             vpilog("text editing!\n");
             break;
+        default:
+            // vpilog("yay event 0x%x!\n", ev.type);
+            break;
         }
     }
 
@@ -1261,6 +1346,7 @@ int vui_update_sdl(vui_context_t *vui)
             SDL_Texture *fg = sdl_ctx->layer_data[i];
 
             SDL_SetRenderTarget(renderer, bg);
+            SDL_SetTextureBlendMode(fg, SDL_BLENDMODE_BLEND);
             SDL_SetTextureColorMod(fg, vui->layer_opacity[i] * 0xFF, vui->layer_opacity[i] * 0xFF, vui->layer_opacity[i] * 0xFF);
             SDL_SetTextureAlphaMod(fg, vui->layer_opacity[i] * 0xFF);
             SDL_RenderCopy(renderer, fg, NULL, NULL);

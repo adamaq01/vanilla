@@ -5,7 +5,7 @@
 
 #include "ui.h"
 
-#define MAX_BUTTON_COUNT 16
+#define MAX_BUTTON_COUNT 10
 #define MAX_BUTTON_TEXT 256
 
 typedef struct {

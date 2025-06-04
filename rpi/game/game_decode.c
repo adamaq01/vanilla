@@ -383,13 +383,13 @@ int decode()
 			av_frame_unref(vpi_present_frame);
 			av_frame_move_ref(vpi_present_frame, decoding_frame);
 
-			pthread_mutex_lock(&screenshot_mutex);
+			/*pthread_mutex_lock(&screenshot_mutex);
 			if (screenshot_buf[0] != 0) {
 				// Dump this frame into file
 				dump_frame_to_file(vpi_present_frame, screenshot_buf);
 				screenshot_buf[0] = 0;
 			}
-			pthread_mutex_unlock(&screenshot_mutex);
+			pthread_mutex_unlock(&screenshot_mutex);*/
 			
 			pthread_cond_broadcast(&decoding_wait_cond);
 			pthread_mutex_unlock(&vpi_decoding_mutex);
@@ -407,7 +407,7 @@ void vpi_decode_screenshot(const char *filename)
 	pthread_mutex_unlock(&screenshot_mutex);
 }
 
-void *vpi_decode_loop(void *)
+void *vpi_decode_loop(void *_unused)
 {
     int ret = VANILLA_PI_ERR_DECODER;
     int ffmpeg_err;
@@ -416,13 +416,14 @@ void *vpi_decode_loop(void *)
     int using_v4l2m2m = 0;
 	const AVCodec *codec = 0;
 
-    if (using_v4l2m2m) {
+    /*if (using_v4l2m2m) {
         codec = avcodec_find_decoder_by_name("h264_v4l2m2m");
-    }
-    if (!codec) {
+    }*/
+    /*if (!codec) {
         codec = avcodec_find_decoder(AV_CODEC_ID_H264);
         using_v4l2m2m = 0;
-    }
+    }*/
+    codec = avcodec_find_decoder_by_name("h264_vita");
 	if (!codec) {
 		vpilog("No decoder was available\n");
 		goto exit;
@@ -471,8 +472,16 @@ void *vpi_decode_loop(void *)
 
 	AVFrame *frame = av_frame_alloc();
 
+	pthread_mutex_init(&vpi_decoding_mutex, NULL);
+	pthread_cond_init(&decoding_wait_cond, NULL);
+	pthread_mutex_init(&vpi_decode_loop_mutex, NULL);
+	pthread_cond_init(&vpi_decode_loop_cond, NULL);
+
+	vpilog("Starting video decode loop\n");
+
     pthread_mutex_lock(&vpi_decode_loop_mutex);
 	while (vpi_decode_loop_running) {
+		// vpilog("Waiting for video packet...\n");
 		while (vpi_decode_loop_running && !vpi_decode_ready) {
             pthread_cond_wait(&vpi_decode_loop_cond, &vpi_decode_loop_mutex);
 		}
@@ -481,12 +490,14 @@ void *vpi_decode_loop(void *)
 			break;
 		}
 
+		// vpilog("Received video packet of size %zu\n", vpi_decode_size);
+
         // Send packet to decoder
         video_packet->data = vpi_decode_data;
         video_packet->size = vpi_decode_size;
         vpi_decode_ready = 0;
 
-		pthread_mutex_lock(&recording_mutex);
+		/*pthread_mutex_lock(&recording_mutex);
 		if (recording_fmt_ctx) {
 			video_packet->stream_index = VIDEO_STREAM_INDEX;
 	
@@ -496,13 +507,13 @@ void *vpi_decode_loop(void *)
 			video_packet->pts = ts;
 
 			av_interleaved_write_frame(recording_fmt_ctx, video_packet);
-			
+
 			// av_interleaved_write_frame() eventually calls av_packet_unref(),
 			// so we must put the references back in
 			video_packet->data = vpi_decode_data;
 			video_packet->size = vpi_decode_size;
 		}
-		pthread_mutex_unlock(&recording_mutex);
+		pthread_mutex_unlock(&recording_mutex);*/
 
         int err = avcodec_send_packet(video_codec_ctx, video_packet);
 

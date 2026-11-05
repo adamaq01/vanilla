@@ -78,6 +78,23 @@ void vpi_config_save()
     sprintf(buf, "%i", vpi_config.connection_setup);
     xmlTextWriterWriteElement(writer, BAD_CAST "connectionsetup", BAD_CAST buf);
 
+    xmlTextWriterWriteElement(writer, BAD_CAST "transport", BAD_CAST vpi_config.transport);
+
+    xmlTextWriterStartElement(writer, BAD_CAST "transports");
+    for (uint8_t i = 0; i < vpi_config.transport_count; i++) {
+        vpi_config_transport_t *transport = &vpi_config.transports[i];
+        xmlTextWriterStartElement(writer, BAD_CAST "transport");
+        xmlTextWriterWriteAttribute(writer, BAD_CAST "id", BAD_CAST transport->id);
+        for (uint8_t j = 0; j < transport->option_count; j++) {
+            xmlTextWriterStartElement(writer, BAD_CAST "option");
+            xmlTextWriterWriteAttribute(writer, BAD_CAST "key", BAD_CAST transport->options[j].key);
+            xmlTextWriterWriteString(writer, BAD_CAST transport->options[j].value);
+            xmlTextWriterEndElement(writer); // option
+        }
+        xmlTextWriterEndElement(writer); // transport
+    }
+    xmlTextWriterEndElement(writer); // transports
+
     sprintf(buf, "%i", vpi_config.region);
     xmlTextWriterWriteElement(writer, BAD_CAST "region", BAD_CAST buf);
 
@@ -174,6 +191,57 @@ void vpi_config_save()
     xmlFreeTextWriter(writer);
 }
 
+// Copies an attribute's value, or returns 0 if the node doesn't have it
+static int get_attribute(xmlNodePtr node, const char *name, char *out, size_t out_size)
+{
+    for (xmlAttr *attribute = node->properties; attribute; attribute = attribute->next) {
+        if (!strcmp((const char *) attribute->name, name) && attribute->children) {
+            vui_strncpy(out, (const char *) attribute->children->content, out_size);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void read_transports(xmlNodePtr transports)
+{
+    for (xmlNodePtr node = transports->children; node; node = node->next) {
+        if (node->type != XML_ELEMENT_NODE || strcmp((const char *) node->name, "transport")) {
+            continue;
+        }
+
+        if (vpi_config.transport_count == VPI_CONFIG_MAX_TRANSPORTS) {
+            vpilog("Too many transports in config, ignoring the rest\n");
+            return;
+        }
+
+        vpi_config_transport_t *transport = &vpi_config.transports[vpi_config.transport_count];
+        memset(transport, 0, sizeof(*transport));
+        if (!get_attribute(node, "id", transport->id, sizeof(transport->id))) {
+            continue;
+        }
+
+        for (xmlNodePtr option = node->children; option; option = option->next) {
+            if (option->type != XML_ELEMENT_NODE || strcmp((const char *) option->name, "option")) {
+                continue;
+            }
+
+            if (transport->option_count == VPI_CONFIG_MAX_TRANSPORT_OPTIONS) {
+                vpilog("Too many options for transport %s in config, ignoring the rest\n", transport->id);
+                break;
+            }
+
+            vpi_config_option_t *entry = &transport->options[transport->option_count];
+            if (get_attribute(option, "key", entry->key, sizeof(entry->key))) {
+                vui_strncpy(entry->value, option->children ? (const char *) option->children->content : "", sizeof(entry->value));
+                transport->option_count++;
+            }
+        }
+
+        vpi_config.transport_count++;
+    }
+}
+
 void vpi_config_init()
 {
     LIBXML_TEST_VERSION;
@@ -182,6 +250,7 @@ void vpi_config_init()
     memset(&vpi_config, 0, sizeof(vpi_config));
 
     vpi_config.server_address = VANILLA_ADDRESS_LOCAL;
+    vui_strncpy(vpi_config.transport, VPI_CONFIG_NETWORK_TRANSPORT, sizeof(vpi_config.transport));
     vpi_config.region = VANILLA_REGION_AMERICA;
     vpi_config.fullscreen = 1;
     vpi_config_reset_default_controls_internal();
@@ -238,6 +307,12 @@ void vpi_config_init()
                         if (child->children) {
                             vui_strncpy(vpi_config.wireless_interface, (const char *) child->children->content, sizeof(vpi_config.wireless_interface));
                         }
+                    } else if (!strcmp((const char *) child->name, "transport")) {
+                        if (child->children) {
+                            vui_strncpy(vpi_config.transport, (const char *) child->children->content, sizeof(vpi_config.transport));
+                        }
+                    } else if (!strcmp((const char *) child->name, "transports")) {
+                        read_transports(child);
                     } else if (!strcmp((const char *) child->name, "recordingdir")) {
                         if (child->children) {
                             vui_strncpy(vpi_config.recording_dir, (const char *) child->children->content, sizeof(vpi_config.recording_dir));
@@ -407,4 +482,25 @@ void vpi_config_reset_default_controls()
 {
     vpi_config_reset_default_controls_internal();
     vpi_config_save();
+}
+
+int vpi_config_uses_network_transport()
+{
+    return !strcmp(vpi_config.transport, VPI_CONFIG_NETWORK_TRANSPORT);
+}
+
+const char *vpi_config_get_transport_option(const char *id, const char *key)
+{
+    for (uint8_t i = 0; i < vpi_config.transport_count; i++) {
+        vpi_config_transport_t *transport = &vpi_config.transports[i];
+        if (!strcmp(transport->id, id)) {
+            for (uint8_t j = 0; j < transport->option_count; j++) {
+                if (!strcmp(transport->options[j].key, key)) {
+                    return transport->options[j].value;
+                }
+            }
+            break;
+        }
+    }
+    return NULL;
 }

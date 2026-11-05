@@ -74,7 +74,10 @@ void jump_to_connection_setup(vui_context_t *vui, int fade_fglayer, vui_callback
 
 void vpi_menu_start_pipe(vui_context_t *vui, int fade_fglayer, vui_callback_t success_action, void *success_data, vui_callback_t cancel_action, void *cancel_data)
 {
-    if (!vpi_config.connection_setup) {
+    if (!vpi_config_uses_network_transport()) {
+        // Another transport than vanilla-pipe's, which needs no setting up here
+        success_action(vui, success_data);
+    } else if (!vpi_config.connection_setup) {
         jump_to_connection_setup(vui, fade_fglayer, success_action, success_data, cancel_action, cancel_data);
     } else if (vpi_config.server_address == VANILLA_ADDRESS_LOCAL) {
 #ifdef VANILLA_PIPE_AVAILABLE
@@ -101,22 +104,33 @@ void vpi_menu_start_pipe(vui_context_t *vui, int fade_fglayer, vui_callback_t su
     }
 }
 
-int vpi_select_transport()
+static const vanilla_transport_t *find_transport(const char *id)
 {
-    // Only vanilla-pipe for now, locally or on another machine
-    const vanilla_transport_t *network = NULL;
     for (size_t i = 0; i < vanilla_get_transport_count(); i++) {
         const vanilla_transport_t *t = vanilla_get_transport(i);
-        if (!strcmp(t->base.id, "network")) {
-            network = t;
-            break;
+        if (!strcmp(t->base.id, id)) {
+            return t;
         }
     }
-    const char *values[8];
-    if (!network || network->base.option_count > sizeof(values) / sizeof(values[0])) {
+    return NULL;
+}
+
+int vpi_select_transport()
+{
+    const char *id = vpi_config.transport;
+    const vanilla_transport_t *transport = find_transport(id);
+    if (!transport) {
+        vpilog("Transport %s isn't available, is its plugin installed?\n", id);
         return VANILLA_ERR_UNSUPPORTED;
     }
 
+    const char *values[VPI_CONFIG_MAX_TRANSPORT_OPTIONS];
+    if (transport->base.option_count > VPI_CONFIG_MAX_TRANSPORT_OPTIONS) {
+        return VANILLA_ERR_UNSUPPORTED;
+    }
+
+    // vanilla-pipe is configured by the connection settings, either locally or
+    // on another machine
     char server[16];
     if (vpi_config.server_address == VANILLA_ADDRESS_LOCAL) {
         snprintf(server, sizeof(server), "local");
@@ -126,9 +140,12 @@ int vpi_select_transport()
         snprintf(server, sizeof(server), "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
     }
 
-    for (size_t i = 0; i < network->base.option_count; i++) {
-        const char *key = network->base.options[i].key;
-        if (!strcmp(key, "server")) {
+    // Options without a stored value take their default
+    for (size_t i = 0; i < transport->base.option_count; i++) {
+        const char *key = transport->base.options[i].key;
+        if (!vpi_config_uses_network_transport()) {
+            values[i] = vpi_config_get_transport_option(id, key);
+        } else if (!strcmp(key, "server")) {
             values[i] = server;
         } else if (!strcmp(key, "interface")) {
             values[i] = vpi_config.wireless_interface;
@@ -137,7 +154,7 @@ int vpi_select_transport()
         }
     }
 
-    return vanilla_set_transport("network", values);
+    return vanilla_set_transport(id, values);
 }
 
 int vpi_menu_show_error(vui_context_t *vui, int status, int fade_fglayer, vui_button_callback_t ok_action, void *ok_data)

@@ -4,6 +4,8 @@ add_library(libvanilla STATIC
     gamepad/gamepad.c
     gamepad/input.c
     gamepad/video.c
+    plugin/loader.c
+    plugin/registry.c
     transport/network.c
     util.c
     vanilla.c
@@ -22,7 +24,11 @@ if (NOT ANDROID)
     )
 endif()
 
+# For loading plugins at runtime
+target_link_libraries(libvanilla PRIVATE ${CMAKE_DL_LIBS})
+
 install(TARGETS libvanilla)
+install(DIRECTORY vanilla_plugin DESTINATION include)
 
 if (VANILLA_BUILD_TESTS)
     function(add_test TEST_NAME TEST_FILES)
@@ -38,4 +44,5 @@ if (VANILLA_BUILD_TESTS)
     add_test(bittest "test/bittest.c")
     add_test(reversebittest "test/reversebit.c")
     add_test(reversebitstresstest "test/reversebitstresstest.c")
+    add_test(plugin "test/plugin.c")
 endif()

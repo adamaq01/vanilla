@@ -43,7 +43,8 @@ typedef struct vanilla_capability {
      */
     int (*validate)(const char *const *option_values, size_t *invalid_option);
 
-    // option_values[i] is the value of options[i], as a string, never NULL
+    // option_values[i] is the value of options[i], as a string, never NULL.
+    // The values are only valid during the call.
     int (*open)(const char *const *option_values, void **ctx);
     void (*close)(void *ctx);
 } vanilla_capability_t;

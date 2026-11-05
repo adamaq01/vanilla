@@ -17,6 +17,7 @@
 #include "gamepad/gamepad.h"
 #include "gamepad/input.h"
 #include "gamepad/video.h"
+#include "plugin/registry.h"
 #include "util.h"
 #include "vanilla.h"
 
@@ -82,13 +83,12 @@ exit:
     return 0;
 }
 
-int vanilla_start_internal(uint32_t server_address, vanilla_bssid_t bssid, vanilla_psk_t psk, thread_start_t thread_start, void *thread_data)
+int vanilla_start_internal(vanilla_bssid_t bssid, vanilla_psk_t psk, thread_start_t thread_start, void *thread_data)
 {
     if (pthread_mutex_trylock(&main_mutex) == 0) {
         pthread_t other;
 
         thread_data_t *data = malloc(sizeof(thread_data_t));
-        data->server_address = server_address;
         data->thread_start = thread_start;
         data->thread_data = thread_data;
         data->bssid = bssid;
@@ -117,9 +117,9 @@ int vanilla_start_internal(uint32_t server_address, vanilla_bssid_t bssid, vanil
     }
 }
 
-int vanilla_start(uint32_t server_address, vanilla_bssid_t bssid, vanilla_psk_t psk)
+int vanilla_start(vanilla_bssid_t bssid, vanilla_psk_t psk)
 {
-    return vanilla_start_internal(server_address, bssid, psk, connect_as_gamepad_internal, 0);
+    return vanilla_start_internal(bssid, psk, connect_as_gamepad_internal, 0);
 }
 
 void vanilla_stop()
@@ -198,9 +198,34 @@ void vanilla_set_battery_status(int battery_status)
     set_battery_status(battery_status);
 }
 
-int vanilla_sync(uint16_t code, uint32_t server_address)
+int vanilla_sync(uint16_t code)
 {
-    return vanilla_start_internal(server_address, (vanilla_bssid_t){.bssid = {0}}, (vanilla_psk_t){.psk = {0}}, sync_internal, (void *) (uintptr_t) code);
+    return vanilla_start_internal((vanilla_bssid_t){.bssid = {0}}, (vanilla_psk_t){.psk = {0}}, sync_internal, (void *) (uintptr_t) code);
+}
+
+int vanilla_register_plugin(vanilla_plugin_entry_t entry)
+{
+    return register_plugin_entry(entry);
+}
+
+int vanilla_load_plugin(const char *path)
+{
+    return load_plugin(path);
+}
+
+size_t vanilla_get_transport_count()
+{
+    return get_transport_count();
+}
+
+const struct vanilla_transport *vanilla_get_transport(size_t index)
+{
+    return get_transport(index);
+}
+
+int vanilla_set_transport(const char *id, const char *const *option_values)
+{
+    return select_transport(id, option_values);
 }
 
 int vanilla_install_polkit(uint32_t server_address)
@@ -254,9 +279,4 @@ size_t vanilla_generate_h264_header(void *data, size_t size)
 void vanilla_send_audio(const void *data, size_t size)
 {
     send_audio_packet(data, size);
-}
-
-void vanilla_set_wireless_interface(const char *intf)
-{
-    strcpy(wireless_interface, intf);
 }

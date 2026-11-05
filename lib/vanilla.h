@@ -9,6 +9,11 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
+#include "vanilla_plugin/entry.h"
+
+// Defined in vanilla_plugin/transport.h, which includes this header
+struct vanilla_transport;
+
 #define VANILLA_SUCCESS                  0
 #define VANILLA_ERR_GENERIC             -1
 #define VANILLA_ERR_UNKNOWN_COMMAND     -2
@@ -21,6 +26,7 @@ extern "C" {
 #define VANILLA_ERR_SHUTDOWN            -9
 #define VANILLA_ERR_CONNECTED           -10
 #define VANILLA_ERR_DISCONNECTED        -11
+#define VANILLA_ERR_UNSUPPORTED         -12
 
 static const uint32_t VANILLA_ADDRESS_LOCAL = 0xFFFFFFFF;
 
@@ -120,12 +126,37 @@ typedef struct {
 #pragma pack(pop)
 
 /**
- * Start listening for gamepad commands
+ * Start listening for gamepad commands, through the transport selected with
+ * vanilla_set_transport()
  */
-int vanilla_start(uint32_t server_address, vanilla_bssid_t bssid, vanilla_psk_t psk);
-int vanilla_sync(uint16_t code, uint32_t server_address);
+int vanilla_start(vanilla_bssid_t bssid, vanilla_psk_t psk);
+int vanilla_sync(uint16_t code);
 
-void vanilla_set_wireless_interface(const char *intf);
+/**
+ * Registers a plugin compiled into the program
+ */
+int vanilla_register_plugin(vanilla_plugin_entry_t entry);
+
+/**
+ * Loads a plugin from a file and registers it. Plugins are never unloaded.
+ * Returns VANILLA_ERR_UNSUPPORTED on platforms that can't load code at runtime.
+ */
+int vanilla_load_plugin(const char *path);
+
+/**
+ * Transports registered so far, including the built-in "network" one
+ * (vanilla-pipe). Their pointers stay valid.
+ */
+size_t vanilla_get_transport_count();
+const struct vanilla_transport *vanilla_get_transport(size_t index);
+
+/**
+ * Selects the transport the next vanilla_start() or vanilla_sync() uses.
+ * `option_values` holds one value per option of the transport, as strings;
+ * NULL values (or a NULL array) take the options' defaults. The values are
+ * copied. Without a selection, vanilla-pipe on this machine is used.
+ */
+int vanilla_set_transport(const char *id, const char *const *option_values);
 
 int vanilla_install_polkit(uint32_t server_address);
 int vanilla_uninstall_polkit(uint32_t server_address);

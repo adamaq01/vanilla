@@ -15,14 +15,13 @@
 #include "input.h"
 #include "video.h"
 
+#include "plugin/registry.h"
 #include "transport/network.h"
 #include "util.h"
 
 // How long the session thread and the GamePad threads wait on the transport
 // before checking whether they should stop
 #define TRANSPORT_POLL_TIMEOUT_MS 250
-
-char wireless_interface[128];
 
 #define EVENT_BUFFER_SIZE 65536
 #define EVENT_BUFFER_ARENA_SIZE VANILLA_MAX_EVENT_COUNT * 2
@@ -46,21 +45,6 @@ void wait_for_interrupt()
     }
 }
 
-// vanilla-pipe is the only transport for now, at the address given to
-// vanilla_start() or vanilla_sync()
-static int open_transport(thread_data_t *data, const vanilla_transport_t **transport, void **ctx)
-{
-    char server[16];
-    network_format_server(data->server_address, server, sizeof(server));
-
-    const char *values[NETWORK_OPTION_COUNT];
-    values[NETWORK_OPTION_SERVER] = server;
-    values[NETWORK_OPTION_INTERFACE] = wireless_interface;
-
-    *transport = &network_transport;
-    return network_transport.base.open(values, ctx);
-}
-
 void sync_internal(thread_data_t *data)
 {
     clear_interrupt();
@@ -72,7 +56,7 @@ void sync_internal(thread_data_t *data)
 
     vanilla_sync_event_t syncdata;
 
-    syncdata.status = open_transport(data, &transport, &ctx);
+    syncdata.status = open_selected_transport(&transport, &ctx);
     if (syncdata.status == VANILLA_SUCCESS) {
         syncdata.status = transport->start_sync(ctx, code);
     }
@@ -122,7 +106,7 @@ void connect_as_gamepad_internal(thread_data_t *data)
     console.bssid = data->bssid;
     console.psk = data->psk;
 
-    int ret = open_transport(data, &info.transport, &info.transport_ctx);
+    int ret = open_selected_transport(&info.transport, &info.transport_ctx);
     if (ret == VANILLA_SUCCESS) {
         ret = info.transport->start_connect(info.transport_ctx, &console);
     }

@@ -163,7 +163,10 @@ void start_syncing(vui_context_t *vui, void *v)
 
     vui_button_create(vui, bkg_rect.x + bkg_rect.w/2 - BTN_SZ*3/2, bkg_rect.y + bkg_rect.h * 3 / 4, BTN_SZ*3, BTN_SZ, lang(VPI_LANG_CANCEL_BTN), 0, VUI_BUTTON_STYLE_BUTTON, sync_fglayer, cancel_sync, 0);
 
-    int ret = vanilla_sync(code, vpi_config.server_address);
+    int ret = vpi_select_transport();
+    if (ret == VANILLA_SUCCESS) {
+        ret = vanilla_sync(code);
+    }
     if (ret == VANILLA_SUCCESS) {
         vui_transition_fade_layer_in(vui, sync_fglayer, 0, 0);
         vui_start_passive_animation(vui, sync_animation_step, 0);

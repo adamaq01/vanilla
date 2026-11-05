@@ -1,6 +1,8 @@
 #include "menu_common.h"
 
 #include <stdio.h>
+#include <string.h>
+#include <vanilla_plugin/transport.h>
 
 #include "config.h"
 #include "lang.h"
@@ -97,6 +99,45 @@ void vpi_menu_start_pipe(vui_context_t *vui, int fade_fglayer, vui_callback_t su
         // Using a middleman server, proceed as usual
         success_action(vui, success_data);
     }
+}
+
+int vpi_select_transport()
+{
+    // Only vanilla-pipe for now, locally or on another machine
+    const vanilla_transport_t *network = NULL;
+    for (size_t i = 0; i < vanilla_get_transport_count(); i++) {
+        const vanilla_transport_t *t = vanilla_get_transport(i);
+        if (!strcmp(t->base.id, "network")) {
+            network = t;
+            break;
+        }
+    }
+    const char *values[8];
+    if (!network || network->base.option_count > sizeof(values) / sizeof(values[0])) {
+        return VANILLA_ERR_UNSUPPORTED;
+    }
+
+    char server[16];
+    if (vpi_config.server_address == VANILLA_ADDRESS_LOCAL) {
+        snprintf(server, sizeof(server), "local");
+    } else {
+        // In network byte order
+        const uint8_t *b = (const uint8_t *) &vpi_config.server_address;
+        snprintf(server, sizeof(server), "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
+    }
+
+    for (size_t i = 0; i < network->base.option_count; i++) {
+        const char *key = network->base.options[i].key;
+        if (!strcmp(key, "server")) {
+            values[i] = server;
+        } else if (!strcmp(key, "interface")) {
+            values[i] = vpi_config.wireless_interface;
+        } else {
+            values[i] = NULL;
+        }
+    }
+
+    return vanilla_set_transport("network", values);
 }
 
 int vpi_menu_show_error(vui_context_t *vui, int status, int fade_fglayer, vui_button_callback_t ok_action, void *ok_data)

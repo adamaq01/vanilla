@@ -18,8 +18,6 @@ typedef uint16_t in_port_t;
 
 struct wpa_ctrl;
 
-extern char wireless_interface[];
-
 #define VANILLA_MAX_EVENT_COUNT 100
 typedef struct
 {
@@ -42,7 +40,7 @@ typedef struct thread_data_t thread_data_t;
 typedef void (*thread_start_t)(thread_data_t *);
 typedef struct thread_data_t
 {
-    uint32_t server_address;
+    uint32_t server_address; // vanilla_install_polkit() only
     event_loop_t *event_loop;
     thread_start_t thread_start;
     void *thread_data;

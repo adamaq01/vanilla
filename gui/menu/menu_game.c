@@ -1209,7 +1209,10 @@ void vpi_menu_game_start(vui_context_t *vui, void *v)
     vanilla_set_region(vpi_config.region);
 
     vpi_console_entry_t *entry = vpi_config.connected_console_entries + console;
-    int r = vanilla_start(vpi_config.server_address, entry->bssid, entry->psk);
+    int r = vpi_select_transport();
+    if (r == VANILLA_SUCCESS) {
+        r = vanilla_start(entry->bssid, entry->psk);
+    }
     if (r != VANILLA_SUCCESS) {
         show_error(vui, (void*)(intptr_t) r);
     } else {

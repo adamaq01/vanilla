@@ -34,30 +34,30 @@ CmdHeader create_ack_packet(CmdHeader *pkt)
 	return ack;
 }
 
-void send_ack_packet(int skt, CmdHeader *pkt)
+void send_ack_packet(gamepad_context_t *info, CmdHeader *pkt)
 {
 	CmdHeader ack = create_ack_packet(pkt);
-    send_to_console(skt, &ack, sizeof(ack), PORT_CMD);
+    send_to_console(info, VANILLA_CHANNEL_CMD, &ack, sizeof(ack));
 }
 
-void send_quick_response(int skt, CmdHeader *request)
+void send_quick_response(gamepad_context_t *info, CmdHeader *request)
 {
     CmdHeader response;
     response.packet_type = PACKET_TYPE_RESPONSE;
     response.payload_size = 0;
     response.query_type = request->query_type;
     response.seq_id = request->seq_id;
-    send_to_console(skt, &response, sizeof(CmdHeader), PORT_CMD);
+    send_to_console(info, VANILLA_CHANNEL_CMD, &response, sizeof(CmdHeader));
 }
 
-void send_generic_response(int skt, CmdHeader *response)
+void send_generic_response(gamepad_context_t *info, CmdHeader *response)
 {
     response->packet_type = PACKET_TYPE_RESPONSE;
 
-    send_to_console(skt, response, response->payload_size + sizeof(CmdHeader), PORT_CMD);
+    send_to_console(info, VANILLA_CHANNEL_CMD, response, response->payload_size + sizeof(CmdHeader));
 }
 
-void handle_generic_packet(gamepad_context_t *info, int skt, GenericPacket *request)
+void handle_generic_packet(gamepad_context_t *info, GenericPacket *request)
 {
     GenericCmdHeader *gen_cmd = &request->generic_cmd_header;
     // vanilla_log("magic: %x, flags: %x, service ID: %u, method ID: %u", gen_cmd->magic_0x7E, gen_cmd->flags, gen_cmd->service_id, gen_cmd->method_id);
@@ -214,10 +214,10 @@ void handle_generic_packet(gamepad_context_t *info, int skt, GenericPacket *requ
     response.cmd_header.seq_id = request->cmd_header.seq_id;
     response.cmd_header.query_type = request->cmd_header.query_type;
     response.cmd_header.payload_size = ntohs(response.generic_cmd_header.payload_size) + sizeof(GenericCmdHeader);
-    send_generic_response(skt, (CmdHeader *) &response);
+    send_generic_response(info, (CmdHeader *) &response);
 }
 
-void handle_uac_uvc_packet(gamepad_context_t *info, int skt, UvcUacPacket *request)
+void handle_uac_uvc_packet(gamepad_context_t *info, UvcUacPacket *request)
 {
     vanilla_log("uac/uvc - mic_enable: %u, mic_freq: %u, mic_mute: %u, mic_volume: %i, mic_volume2: %i", request->uac_uvc.mic_enable, request->uac_uvc.mic_freq, request->uac_uvc.mic_mute, request->uac_uvc.mic_volume, request->uac_uvc.mic_volume_2);
 
@@ -241,38 +241,38 @@ void handle_uac_uvc_packet(gamepad_context_t *info, int skt, UvcUacPacket *reque
 
 	memcpy(buf + sizeof(CmdHeader), uvc_resp, uvc_resp_size);
 
-    send_to_console(skt, buf, sizeof(buf), PORT_CMD);
+    send_to_console(info, VANILLA_CHANNEL_CMD, buf, sizeof(buf));
 }
 
-void handle_time_packet(int skt, TimePacket *request)
+void handle_time_packet(gamepad_context_t *info, TimePacket *request)
 {
     vanilla_log("time - days: %u, padding: %u, seconds: %u", request->time.days_counter, request->time.padding, request->time.seconds_counter);
 
-    send_quick_response(skt, &request->cmd_header);
+    send_quick_response(info, &request->cmd_header);
 }
 
-void handle_command_packet(gamepad_context_t *info, int skt, CmdHeader *request)
+void handle_command_packet(gamepad_context_t *info, CmdHeader *request)
 {
 	// vanilla_log("packet_type: %u, query_type: %u, payload_size: 0x%X", request->packet_type, request->query_type, request->payload_size);
     switch (request->packet_type)
     {
     case PACKET_TYPE_REQUEST:
-        send_ack_packet(skt, request);
+        send_ack_packet(info, request);
         switch (request->query_type)
         {
         case CMD_GENERIC:
         {
-            handle_generic_packet(info, skt, (GenericPacket *)request);
+            handle_generic_packet(info, (GenericPacket *)request);
             break;
         }
         case CMD_UVC_UAC:
         {
-            handle_uac_uvc_packet(info, skt, (UvcUacPacket *)request);
+            handle_uac_uvc_packet(info, (UvcUacPacket *)request);
             break;
         }
         case CMD_TIME:
         {
-            handle_time_packet(skt, (TimePacket *)request);
+            handle_time_packet(info, (TimePacket *)request);
             break;
         }
         default:
@@ -280,7 +280,7 @@ void handle_command_packet(gamepad_context_t *info, int skt, CmdHeader *request)
         }
         break;
     case PACKET_TYPE_RESPONSE:
-        send_ack_packet(skt, request);
+        send_ack_packet(info, request);
         switch (request->query_type)
         {
         default:
@@ -307,10 +307,10 @@ void *listen_command(void *x)
 
     do
     {
-        size = recv(info->socket_cmd, data, sizeof(data), 0);
+        size = recv_from_console(info, VANILLA_CHANNEL_CMD, data, sizeof(data));
         if (size > 0) {
             CmdHeader *header = (CmdHeader *)data;
-            handle_command_packet(info, info->socket_cmd, header);
+            handle_command_packet(info, header);
         }
     } while (!is_interrupted());
 

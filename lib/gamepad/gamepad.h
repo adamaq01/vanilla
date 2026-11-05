@@ -14,8 +14,7 @@ typedef uint16_t in_port_t;
 #endif
 
 #include "vanilla.h"
-
-#include "../pipe/ports.h"
+#include "vanilla_plugin/transport.h"
 
 struct wpa_ctrl;
 
@@ -35,11 +34,8 @@ typedef struct
 typedef struct
 {
     event_loop_t *event_loop;
-    int socket_vid;
-    int socket_aud;
-    int socket_hid;
-    int socket_msg;
-    int socket_cmd;
+    const vanilla_transport_t *transport;
+    void *transport_ctx;
 } gamepad_context_t;
 
 typedef struct thread_data_t thread_data_t;
@@ -57,9 +53,8 @@ typedef struct thread_data_t
 void sync_internal(thread_data_t *data);
 void connect_as_gamepad_internal(thread_data_t *data);
 int install_polkit_internal(thread_data_t *data, int install);
-void create_server_sockaddr(struct sockaddr_in *addr, size_t *size, uint16_t port);
-void send_to_sockaddr(int fd, const void *data, size_t data_size, const struct sockaddr_in *sockaddr, size_t sockaddr_size);
-void send_to_console(int fd, const void *data, size_t data_size, uint16_t port);
+int send_to_console(gamepad_context_t *ctx, vanilla_channel_t channel, const void *data, size_t data_size);
+int recv_from_console(gamepad_context_t *ctx, vanilla_channel_t channel, void *buf, size_t size);
 int push_event(event_loop_t *loop, int type, const void *data, size_t size);
 int get_event(event_loop_t *loop, vanilla_event_t *event, int wait);
 int acquire_event(event_loop_t *loop, vanilla_event_t **event);

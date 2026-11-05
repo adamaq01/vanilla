@@ -118,7 +118,7 @@ static void *handle_queued_audio(void *data)
 		gettimeofday(&last, 0);
 
 		// Send packet to console
-		send_to_console(ctx->socket_aud, &ap, header_sz + MIC_PAYLOAD_SIZE, PORT_AUD);
+		send_to_console(ctx, VANILLA_CHANNEL_AUD, &ap, header_sz + MIC_PAYLOAD_SIZE);
 
     	pthread_mutex_lock(&queued_audio_mutex);
 	}
@@ -181,7 +181,7 @@ void *listen_audio(void *x)
 	}
 
     do {
-        size = recv(info->socket_aud, data, sizeof(data), 0);
+        size = recv_from_console(info, VANILLA_CHANNEL_AUD, data, sizeof(data));
         if (size > 0) {
             handle_audio_packet(info, data, size);
         }

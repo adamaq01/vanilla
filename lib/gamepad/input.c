@@ -200,7 +200,7 @@ void set_battery_status(int status)
     pthread_mutex_unlock(&button_mtx);
 }
 
-void send_input(int socket_hid, const struct sockaddr_in *addr, size_t addr_size)
+void send_input(gamepad_context_t *info)
 {
     InputPacket ip;
     memset(&ip, 0, sizeof(ip));
@@ -289,7 +289,7 @@ void send_input(int socket_hid, const struct sockaddr_in *addr, size_t addr_size
 
     ip.fw_version_neg = 215;
 
-    send_to_sockaddr(socket_hid, &ip, sizeof(ip), addr, addr_size);
+    send_to_console(info, VANILLA_CHANNEL_HID, &ip, sizeof(ip));
 }
 
 void *listen_input(void *x)
@@ -298,12 +298,8 @@ void *listen_input(void *x)
 
     pthread_mutex_init(&button_mtx, NULL);
 
-    struct sockaddr_in addr;
-    size_t addr_size;
-    create_server_sockaddr(&addr, &addr_size, PORT_HID - 100);
-
     do {
-        send_input(info->socket_hid, &addr, addr_size);
+        send_input(info);
         usleep(5555); // Roughly 180Hz, same as the original gamepad
     } while (!is_interrupted());
 

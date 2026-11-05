@@ -4,6 +4,7 @@ add_library(libvanilla STATIC
     gamepad/gamepad.c
     gamepad/input.c
     gamepad/video.c
+    transport/network.c
     util.c
     vanilla.c
 )

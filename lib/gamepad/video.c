@@ -57,12 +57,12 @@ void request_idr()
     pthread_mutex_unlock(&idr_mutex);
 }
 
-void send_idr_request_to_console(int socket_msg)
+void send_idr_request_to_console(gamepad_context_t *ctx)
 {
     // Make an IDR request to the Wii U?
     unsigned char idr_request[] = {1, 0, 0, 0}; // Undocumented
     vanilla_log("SENDING IDR");
-    send_to_console(socket_msg, idr_request, sizeof(idr_request), PORT_MSG);
+    send_to_console(ctx, VANILLA_CHANNEL_MSG, idr_request, sizeof(idr_request));
 }
 
 static uint8_t *write_slice_nal(int is_idr, int frame_decode_num, uint8_t *out)
@@ -187,7 +187,7 @@ void handle_video_packet(gamepad_context_t *ctx, VideoPacket *vp)
         }
 
         if (!video_complete_frame && !is_idr) {
-            send_idr_request_to_console(ctx->socket_msg);
+            send_idr_request_to_console(ctx);
             return;
         }
 
@@ -196,7 +196,7 @@ void handle_video_packet(gamepad_context_t *ctx, VideoPacket *vp)
 
     pthread_mutex_lock(&idr_mutex);
     if (idr_is_queued) {
-        send_idr_request_to_console(ctx->socket_msg);
+        send_idr_request_to_console(ctx);
         idr_is_queued = 0;
     }
     pthread_mutex_unlock(&idr_mutex);
@@ -402,7 +402,7 @@ void *listen_video(void *x)
 
     do {
         VideoPacket *vp = &video_packet_queue[video_packet_max % VIDEO_PACKET_QUEUE_MAX];
-        size = recv(info->socket_vid, (void *) vp, sizeof(VideoPacket), 0);
+        size = recv_from_console(info, VANILLA_CHANNEL_VID, vp, sizeof(VideoPacket));
         if (size > 0) {
             pthread_mutex_lock(&video_packet_mutex);
             video_packet_max++;

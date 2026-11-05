@@ -208,6 +208,5 @@ void *listen_command(void *x);
 void set_region(int region);
 
 CmdHeader create_ack_packet(CmdHeader *pkt);
-void send_ack_packet(int skt, CmdHeader *pkt);
 
 #endif // GAMEPAD_COMMAND_H
